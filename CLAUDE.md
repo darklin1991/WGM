@@ -16,10 +16,12 @@
 |---|---|---|
 | 框架 | Flutter (Dart) | 跨平台 UI 一致、法官操作介面客製化需求高 |
 | 目標平台 | **僅 Android** | 可側載 APK，不必上架 |
+| web/ 目錄 | **僅供開發預覽，不是交付目標** | `flutter run -d chrome` 熱重載幾秒就能看到 UI 改動，比等 Gradle build 五分鐘快得多。不要為 web 做任何相容處理或功能妥協 |
 | 板子定義 | **設定檔驅動（JSON）** | 新增板子與規則變體不必改程式、不必重新發版 |
 | 規則變體 | **寫在板子設定檔的 `rules` 旗標裡** | 不同賽制規則不同（同守同救、女巫自救…），由旗標控制 |
 | 資料儲存 | **純單機本地** | 無後端、無連線、無多人同步 |
 | 使用情境 | **只有法官操作 App** | 玩家不連線；不需帳號、不需即時通訊 |
+| 版本控管 | **git ＋ GitHub remote（public）** | 擔當 2026-09-15 改為上傳 `https://github.com/darklin1991/WGM.git`（公開 repo）。提交前確認不含機敏資訊 
 
 未經擔當同意不要引入：後端 API、連線多人、iOS 支援、玩家端介面。這些明確排除在現階段範圍外。
 
@@ -277,7 +279,7 @@ test/
 | 旗標 | 含義 |
 |---|---|
 | `guardHealKills` | 同守同救是否致死（奶穿）。`true` 為多數賽制 |
-| `witchSelfHealNight` | 女巫可自救的夜次：`0` 不可、`1` 僅首夜、`-1` 不限 |
+| `witchSelfHealNight` | 女巫可自救的夜次：`0` 不可、`1` 僅首夜、`-1` 不限。**未指定時依人數推導**，見下方說明 |
 | `witchDualUseSameNight` | 同一夜是否可同時用解藥與毒藥 |
 | `guardCannotRepeatTarget` | 守衛不可連續兩晚守同一人（應在輸入階段就擋住） |
 | `poisonedHunterCannotShoot` | 獵人被毒死是否不可開槍 |
@@ -285,6 +287,14 @@ test/
 | `tieBreak` | 平票處理：`pk_then_none`／`pk_then_revote`／`none` |
 | `winCondition` | `sideElimination`（屠邊）／`totalElimination`（屠城） |
 | `wolfSelfDetonateEndsDay` | 自爆是否立即結束白天、跳過投票進入夜晚 |
+
+### 依人數決定的規則
+
+**9 人以上，女巫不可自救**（8 人以下的小局僅首夜可自救）。
+
+這是依人數決定的通則，所以做成 `RuleFlags.defaultWitchSelfHealNight(playerCount)` 推導，**不寫死在每份設定檔裡** —— 新增板子時不必記得填 `witchSelfHealNight`，規則自動生效。個別板子若採用不同賽制，仍可在 `rules.witchSelfHealNight` 明確覆寫。
+
+`test/core/preset_assets_test.dart` 會直接讀 `assets/presets/` 的實際檔案驗證這條規則，內建板子若違反會在測試階段就被抓到，而不是等法官開場才發現。
 
 ---
 
