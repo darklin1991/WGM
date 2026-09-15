@@ -57,6 +57,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # 板子設定檔。新增板子只需在此目錄新增 JSON，不必改動程式碼。
+  assets:
+    - assets/presets/
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
