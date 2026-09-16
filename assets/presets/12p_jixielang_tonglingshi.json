@@ -1,0 +1,26 @@
+{
+  "presetId": "12p_jixielang_tonglingshi",
+  "name": "12人 機械狼通靈師",
+  "playerCount": 12,
+  "roles": [
+    { "role": "wolf",         "count": 3 },
+    { "role": "mechanicWolf", "count": 1 },
+    { "role": "psychic",      "count": 1 },
+    { "role": "witch",        "count": 1 },
+    { "role": "hunter",       "count": 1 },
+    { "role": "guard",        "count": 1 },
+    { "role": "villager",     "count": 4 }
+  ],
+  "nightOrder": ["mechanicWolf", "guard", "wolf", "witch", "hunter", "psychic"],
+  "rules": {
+    "guardHealKills": true,
+    "witchDualUseSameNight": false,
+    "guardCannotRepeatTarget": true,
+    "poisonedHunterCannotShoot": true,
+    "mechanicWolfLearnOnce": true,
+    "sheriffVoteWeight": 1.5,
+    "tieBreak": "pk_then_none",
+    "winCondition": "sideElimination",
+    "wolfSelfDetonateEndsDay": true
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "presetId": "12p_langmei_qishi",
+  "name": "12人 狼美騎士",
+  "playerCount": 12,
+  "roles": [
+    { "role": "wolf",       "count": 3 },
+    { "role": "wolfBeauty", "count": 1 },
+    { "role": "seer",       "count": 1 },
+    { "role": "witch",      "count": 1 },
+    { "role": "guard",      "count": 1 },
+    { "role": "knight",     "count": 1 },
+    { "role": "villager",   "count": 4 }
+  ],
+  "nightOrder": ["guard", "wolf", "wolfBeauty", "witch", "seer"],
+  "rules": {
+    "guardHealKills": true,
+    "witchDualUseSameNight": false,
+    "guardCannotRepeatTarget": true,
+    "poisonedHunterCannotShoot": true,
+    "charmCannotRepeatTarget": true,
+    "wolfBeautyCannotSelfKill": true,
+    "knightDuelBlocksCharmSuicide": true,
+    "knightDuelEndsDay": true,
+    "sheriffVoteWeight": 1.5,
+    "tieBreak": "pk_then_none",
+    "winCondition": "sideElimination",
+    "wolfSelfDetonateEndsDay": true
+  }
+}

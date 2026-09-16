@@ -69,6 +69,27 @@ abstract final class Roles {
     nightPriority: 20,
   );
 
+  /// 狼美人：與狼隊相認、參與狼刀，之後另外睜眼魅惑一人。
+  /// 自己出局（含被毒）時，被魅惑者殉情；但被騎士決鬥致死則技能不發動。
+  static const wolfBeauty = Role(
+    id: 'wolfBeauty',
+    nameZh: '狼美人',
+    camp: Camp.wolf,
+    kind: RoleKind.wolf,
+    nightPriority: 25,
+  );
+
+  /// 機械狼：**不與小狼相認**，所以夜晚單獨睜眼，不併入狼隊步驟。
+  /// 可於任一晚學習一名玩家的身分技能（整局限一次），隔夜起生效；
+  /// 開局不帶刀，其餘小狼全數出局後才獨自帶刀。不能自爆。
+  static const mechanicWolf = Role(
+    id: 'mechanicWolf',
+    nameZh: '機械狼',
+    camp: Camp.wolf,
+    kind: RoleKind.wolf,
+    nightPriority: 25,
+  );
+
   static const witch = Role(
     id: 'witch',
     nameZh: '女巫',
@@ -83,6 +104,25 @@ abstract final class Roles {
     camp: Camp.good,
     kind: RoleKind.god,
     nightPriority: 40,
+  );
+
+  /// 通靈師：每晚查驗一名玩家的**真實身分**（不只好人／狼人），無次數限制。
+  /// 在夜晚順序中站預言家的位置。
+  static const psychic = Role(
+    id: 'psychic',
+    nameZh: '通靈師',
+    camp: Camp.good,
+    kind: RoleKind.god,
+    nightPriority: 40,
+  );
+
+  /// 騎士：無夜間行動。白天投票前可翻牌與一人決鬥 ——
+  /// 對方是狼則對方死亡並立即進入黑夜，對方是好人則騎士出局、白天繼續。
+  static const knight = Role(
+    id: 'knight',
+    nameZh: '騎士',
+    camp: Camp.good,
+    kind: RoleKind.god,
   );
 
   /// 獵人：無夜間行動，死亡時觸發開槍（被毒死除外，依規則旗標）。
@@ -112,12 +152,24 @@ abstract final class Roles {
     guard,
     wolf,
     wolfKing,
+    wolfBeauty,
+    mechanicWolf,
     witch,
     seer,
+    psychic,
+    knight,
     hunter,
     idiot,
     villager,
   ];
+
+  /// 夜晚會與狼隊一起睜眼、互相識別並共同決定狼刀的角色。
+  ///
+  /// **機械狼不在其中** —— 牠不與小狼相認，必須單獨睜眼。
+  static const wolfTeamIds = <String>{'wolf', 'wolfKing', 'wolfBeauty'};
+
+  /// 槍牌：死亡時可以開槍帶人的身分。機械狼學到這些才拿得到槍。
+  static const gunRoleIds = <String>{'hunter', 'wolfKing'};
 
   static final Map<String, Role> _byId = {
     for (final r in all) r.id: r,

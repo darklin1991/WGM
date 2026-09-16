@@ -27,27 +27,35 @@
 
 ## 目前狀態
 
-**開發環境已建置完成並實測通過**（已成功產出 debug APK）。
+專案骨架、板子設定檔載入、夜晚結算引擎與夜晚流程 UI 已完成。已驗證：`flutter analyze` 無問題、163 項測試全數通過、debug APK 建置成功。
 
-⚠️ **此 repo 尚未初始化 Flutter 專案** —— 下一步是：
+內建 6 個板子（見 `assets/presets/`），支援 12 種角色。
 
-```
-flutter create --platforms=android --org tw.com.aoci --project-name wgm .
-git init
-```
+尚未實作：白天流程（警長競選／發言計時／投票）、勝負判定引擎、撤銷快照、復盤日誌與本地持久化。
 
-## 開發環境（已建置，2026-08-24 驗證）
+⚠️ **騎士的決鬥尚未串接** —— 角色定義、板子與規則旗標（`knightDuelEndsDay`、
+`knightDuelBlocksCharmSuicide`）都已就緒，但決鬥是白天技能，要等
+`day_controller.dart` 做好才能真正觸發。同理，`DeathCause.knightDuel` 目前
+只有定義，夜晚結算不會產生它。
+
+## 開發環境（2026-09-16 於本機重建並驗證）
+
+⚠️ 舊版本檔記載的 `D:\flutter`／`D:\Android\Sdk` 屬於**另一台機器**；本機 D: 是光碟機。工具鏈已改裝於 H:。
 
 | 元件 | 版本 | 位置 |
 |---|---|---|
-| Flutter | 3.47.1 stable (Dart 3.13.1) | `D:\flutter` |
-| Android Studio | 2026.1.3.7 | `C:\Program Files\Android\Android Studio` |
-| JDK | 25.0.2（Android Studio 自帶 jbr） | `…\Android Studio\jbr` |
-| Android SDK | platform-tools 37.0.1、android-36 / android-37.1、build-tools 36.0.0 / 37.0.0 | `D:\Android\Sdk` |
-| NDK | 28.2.13676358 (r28c) | `D:\Android\Sdk\ndk` |
-| Gradle | 9.3.1（Flutter 自動取得） | `~\.gradle` |
+| Flutter | 3.47.4 stable (Dart 3.13.3) | `H:\flutter` |
+| JDK | Temurin 21.0.12.1 LTS（免安裝 zip，不需管理員權限） | `H:\jdk-21` |
+| Android cmdline-tools | rev 23 | `H:\Android\Sdk\cmdline-tools\latest` |
+| Android SDK | platform-tools 37.0.1、platforms/android-36、build-tools 36.0.0 | `H:\Android\Sdk` |
+| NDK | 28.2.13676358 (r28c) | `H:\Android\Sdk\ndk` |
+| Gradle | Flutter 自動取得 | `~\.gradle` |
 
-已持久寫入使用者層級環境變數：`JAVA_HOME`、`ANDROID_HOME`、PATH（含 `D:\flutter\bin`、`D:\Android\Sdk\platform-tools`、jbr 的 bin）。開新終端即生效。
+**未安裝 Android Studio** —— 只靠 cmdline-tools 就能建置 APK，省下數 GB。若要用 AVD 模擬器才需要另外補裝。
+
+Flutter 3.47.4 要求 compileSdk 36、minSdk 24、targetSdk 36、NDK 28.2.13676358（定義於 `H:\flutter\packages\flutter_tools\gradle\src\main\kotlin\FlutterExtension.kt`，換 Flutter 版本時查這個檔）。
+
+已持久寫入使用者層級環境變數：`JAVA_HOME=H:\jdk-21`、`ANDROID_HOME`／`ANDROID_SDK_ROOT=H:\Android\Sdk`，PATH 追加 `H:\flutter\bin`、`H:\jdk-21\bin`、`H:\Android\Sdk\platform-tools`、`H:\Android\Sdk\cmdline-tools\latest\bin`。**要開新終端才生效**。
 
 ### 環境踩坑筆記（重裝或換機必讀）
 
@@ -58,15 +66,15 @@ git init
 改用新的 `android` CLI，套件命名也從分號改成斜線：
 
 ```
-D:\Android\Sdk\cmdline-tools\latest\bin\android.exe --sdk D:\Android\Sdk --no-metrics sdk list --all "ndk*"
-D:\Android\Sdk\cmdline-tools\latest\bin\android.exe --sdk D:\Android\Sdk --no-metrics sdk install ndk/28.2.13676358
+H:\Android\Sdk\cmdline-tools\latest\bin\android.exe --sdk H:\Android\Sdk --no-metrics sdk list --all "ndk*"
+H:\Android\Sdk\cmdline-tools\latest\bin\android.exe --sdk H:\Android\Sdk --no-metrics sdk install ndk/28.2.13676358
 ```
 
 舊寫法 `platforms;android-36` → 新寫法 `platforms/android-36`。
 
 **2. 新 CLI 安裝成功後仍回傳 crash 的 exit code**
 
-安裝完成後工具自身會以 `-1073740791`（`0xC0000409`，STATUS_STACK_BUFFER_OVERRUN）結束。**不要用 exit code 判斷成敗，要驗證檔案是否存在**，例如 `D:\Android\Sdk\ndk\28.2.13676358\source.properties`。
+安裝完成後工具自身會以 `-1073740791`（`0xC0000409`，STATUS_STACK_BUFFER_OVERRUN）結束。2026-09-16 重裝時四個套件全數如此，但檔案都正確落地。**不要用 exit code 判斷成敗，要驗證檔案是否存在**，例如 `H:\Android\Sdk\ndk\28.2.13676358\source.properties`。
 
 **3. NDK 必須預先手動安裝**
 
@@ -74,20 +82,34 @@ Flutter 專案的 `ndkVersion = flutter.ndkVersion`（目前為 28.2.13676358）
 
 其他套件（platform、build-tools）Gradle 走 AGP 內建下載機制，會自動補裝，不經 sdkmanager，沒有這個問題。
 
-**4. Flutter 3.47.1 實際使用 API 36 / build-tools 36**
+**4. Flutter 3.47.4 實際使用 API 36 / build-tools 36**
 
-不是最新的 37.x。Gradle 第一次 build 時會自己補裝 android-36 與 build-tools 36.0.0。手動裝 37.x 沒有必要（裝了也無害，只是多佔空間）。
+不是最新的 37.x。手動裝 37.x 沒有必要（裝了也無害，只是多佔空間）。
 
-**5. `flutter doctor` 有兩條警告可以忽略**
+**5. JDK 用免安裝的 Temurin zip，不要用 winget**
 
-- **Android license status unknown** —— 誤報。新 `android` CLI 在安裝套件時就自動接受授權（`D:\Android\Sdk\licenses\android-sdk-license` 確實存在），且它會明確回報「`--licenses` 選項已不再需要」；Flutter 仍用舊 sdkmanager 的方式查詢才顯示 unknown。實際 build 時 Gradle 的授權檢查是通過的（`License for package ... accepted`）。
+`winget install Microsoft.OpenJDK.21` 會啟動 MSI 並跳出 UAC 管理員授權視窗，在非互動終端裡會直接卡死（`--silent --disable-interactivity` 也擋不住）。改抓 Temurin 的 zip 解開即可，不需要任何權限：
+
+```
+https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse
+```
+
+JDK 21 LTS 與 Gradle 9.x 相容良好。舊記錄用的 JDK 25 也能跑，但 21 是 AGP 官方支援範圍內的穩妥選擇。
+
+**6. `flutter doctor` 只剩一條可忽略的警告**
+
 - **Visual Studio not installed** —— 那是開發 **Windows 桌面** App 才需要的。本專案只做 Android，不必為它裝好幾 GB 的 C++ 工具鏈。
+- 舊記錄提到的 **Android license status unknown** 這次沒有出現：新 `android` CLI 安裝套件時就寫入了授權檔，doctor 直接顯示 `All Android licenses accepted`。
 
-**6. JDK 25 可正常運作**
+**7. 第一次 `flutter build apk` 會很久**
 
-Gradle 9.3.1 搭 JDK 25 沒問題，只有無害的 `--enable-native-access` 警告。不需要另外裝 JDK 17/21。
+實測約 **47 分鐘**（Gradle distribution 與全部相依都要下載）。不是卡住，不要中途砍掉。之後的增量 build 只要數十秒。建置時會出現 `SDK XML version 4` 警告，無害。
 
-## 常用指令（專案建立後）
+**8. PowerShell 5.1 解壓大型 zip**
+
+`Expand-Archive` 很慢；用 `[System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $dest)` 快得多。注意 5.1 沒有 `overwrite` 多載，第三個參數是 `entryNameEncoding`，傳 `$true` 會報型別轉換錯誤。
+
+## 常用指令
 
 ```
 flutter pub get                  # 安裝套件
@@ -125,6 +147,15 @@ flutter clean                    # 清除建置產物
 | 開槍 | `hunterShot` | 獵人死亡技能 |
 | 自爆 | `wolfSelfDetonate` | 狼人白天自爆，直接進夜 |
 | 白痴翻牌 | `idiotReveal` | 被放逐時翻牌不死，失去投票權 |
+| 魅惑 | `charm` | 狼美人指定殉情對象 |
+| 殉情 | `loveSuicide` | 狼美人出局，被魅惑者隨之死亡 |
+| 決鬥 | `knightDuel` | 騎士白天翻牌與一人對決 |
+| 學習 | `mechanicLearn` | 機械狼複製一名玩家的身分技能 |
+| 帶刀 | `carriesKnife` | 機械狼在小狼全滅後才取得狼刀 |
+| 破盾 | `shieldBroken` | 雙刀集中同一人，守衛與解藥都失效 |
+| 毒反彈 | `poisonReflected` | 機械狼的守護把毒反噬給下毒者 |
+| 槍牌 | `gunRole` | 死亡可開槍的身分（獵人、狼王） |
+| 吃刀／吃毒／吃推 | `wolfKill` / `poison` / `exile` | 被狼刀／被毒／被投票放逐 |
 | 警長 | `sheriff` | 票權加權 |
 | 上警 | `runForSheriff` | 參選 |
 | 退水 | `withdrawFromElection` | 退出競選 |
@@ -160,6 +191,23 @@ flutter clean                    # 清除建置產物
 
 1. **收集階段**：法官依 `nightOrder` 逐一輸入各角色行動，只記錄意圖，不做判定。
 2. **結算階段**：全部收集完後一次性套用衝突規則，產出當夜死亡名單。
+
+**機械狼的資訊時序也是特例**。牠不與小狼相認，所以有兩件事只有法官知道、必須用手勢告訴牠：今晚有沒有刀，以及學到了什麼身分／能不能開槍。這兩件事的時機不同，所以機械狼一晚要睜眼**兩次**：
+
+- **開頭那一輪**（`NightSkill.mechanicTurn`，**每晚都有**）：先給**開刀手勢**（小狼是否已全滅 → 今晚有沒有刀）→ 有刀就選**第一刀** → 是否使用技能。就算沒技能可用（學到平民、或學了還沒生效）也要叫起來，否則機械狼無從得知自己有沒有刀。要收的技能記在 `NightStep.mechanicSubSkill`，不是 `skill`。
+- **結尾那一輪**（`NightSkill.mechanicReveal`）：告知學到的身分與開槍手勢。非得排在最後不可 —— 牠第一個睜眼時身分都還沒登記完、女巫的毒也還沒收，那時法官根本講不出來。
+
+不要為了少一個步驟就把結尾那輪併回開頭，也不要因為「這晚沒技能」就省掉開頭那輪。
+
+小狼全滅後，狼刀由機械狼在自己那一輪開，不需要另外生一個「機械狼帶刀」的步驟。
+
+### 角色全滅的步驟一律走過場，不要跳過
+
+法官若因為某個身分死光就不喊它，玩家馬上從流程長度聽出誰出局了。所以**第二夜起沒有任何步驟會被跳過** —— 角色全滅的步驟改為走過場（`_Sub.passThrough`）：照常喊、照常停頓，只是沒有東西要收。喊的是角色名（`primaryRole.nameZh`）而不是步驟標題，否則「機械狼（守衛）請睜眼」會直接露餡。
+
+狼隊那一步是唯一的例外組合：機械狼學到狼人時，那一格就是牠的**第二刀**（第一刀在開頭那一輪砍）。兩刀分開在第 1 格與第 3 格收，也剛好讓同一人可以被選兩次（破盾）。
+
+**查驗真實身分的角色要排在夜晚順序的後段**。通靈師查的是真實身分，法官必須先登記完所有人才答得出來 —— 所以 12人機械狼通靈師板把它排在最後（`nightOrder` 的 `psychic`）。獵人夾在女巫與通靈師之間：獵人要排在女巫之後（先收完毒才知道給哪個開槍手勢），排在通靈師之前則是為了讓通靈師殿後。
 
 **女巫的資訊時序是特例**（也是奶穿的成因）：女巫看到的是「**狼刀目標**」，**不套用守衛結果**。因此女巫可能對一個已被守衛守住的人用解藥，最終才在結算階段判定為同守同救。實作時不要為了方便就先把守衛結果算進去給女巫看 —— 那會讓奶穿永遠不可能發生。
 
@@ -287,6 +335,13 @@ test/
 | `tieBreak` | 平票處理：`pk_then_none`／`pk_then_revote`／`none` |
 | `winCondition` | `sideElimination`（屠邊）／`totalElimination`（屠城） |
 | `wolfSelfDetonateEndsDay` | 自爆是否立即結束白天、跳過投票進入夜晚 |
+| `charmCannotRepeatTarget` | 狼美人不可連續兩晚魅惑同一人（應在輸入階段就擋住） |
+| `wolfBeautyCannotSelfKill` | 狼隊不可把刀指向狼美人自己 |
+| `knightDuelBlocksCharmSuicide` | 狼美人被騎士決鬥致死時，殉情不發動 |
+| `knightDuelEndsDay` | 騎士決鬥到狼後，是否立即結束白天進入黑夜 |
+| `mechanicWolfLearnOnce` | 機械狼是否整局只能學習一次 |
+| `mechanicGuardReflectsPoison` | 機械狼（學到守衛）的守護是否把毒反彈給下毒者 |
+| `mechanicDoubleKnifeBreaksShield` | 機械狼（學到狼人）雙刀集中同一人是否破盾 |
 
 ### 依人數決定的規則
 
@@ -315,6 +370,31 @@ test/
 | 獵人被放逐 | 可開槍 | — |
 | 白痴被放逐 | 翻牌不死，失去投票權，留在場上 | — |
 | 白痴被狼刀／被毒 | 正常死亡 | — |
+| 狼美人夜裡出局（刀／毒／奶穿） | 被魅惑者**殉情** | — |
+| 狼美人被騎士決鬥致死 | 被魅惑者**不殉情** | `knightDuelBlocksCharmSuicide` |
+| 被魅惑者已因他故死亡 | 死因維持原本的，不改記殉情 | — |
+| 被魅惑者被守衛守住，但狼美人死了 | **死亡**（守衛防不了殉情） | — |
+| 殉情死的獵人 | 可開槍（死因不是毒） | — |
+| 狼美人連續兩晚魅惑同一人 | 輸入階段擋住 | `charmCannotRepeatTarget` |
+| 狼刀指向狼美人 | 輸入階段擋住 | `wolfBeautyCannotSelfKill` |
+| 機械狼與原守衛各守一人 | 兩人都擋得住，紀錄各自獨立 | — |
+| 機械狼（學到守衛）守 ＋ 女巫救 | **死亡**（同守同救照樣成立） | `guardHealKills` |
+| 機械狼（學到守衛）守護的人被毒 | 目標存活，**毒反彈毒死下毒者** | `mechanicGuardReflectsPoison` |
+| 機械狼（學到女巫）的藥 | **只有一瓶毒藥，沒有解藥** | — |
+| 小狼還活著時的機械狼 | **沒有刀**，學到狼人也砍不了 | — |
+| 機械狼帶刀（小狼全滅）＋學到狼人 | 該晚砍兩刀 | — |
+| 雙刀砍不同人 | 兩刀各自結算 | — |
+| 雙刀砍同一人 | **破盾**，守衛的守護與女巫的解藥都失效，必死 | `mechanicDoubleKnifeBreaksShield` |
+| 破盾 ＋ 守 ＋ 解藥 | **死亡**，死因是狼刀（守與救都被打穿，**不構成奶穿**） | — |
+| 機械狼（學到槍牌）吃刀／吃推出局 | 可開槍 | — |
+| 機械狼（學到槍牌）吃毒或殉情出局 | **不可**開槍（比獵人本人嚴格） | — |
+| 機械狼學習當晚 | 技能**不生效**，隔夜才生效 | — |
+| 機械狼夜晚睜眼 | **兩次**：開頭給開刀手勢並行動，結尾聽身分與開槍手勢 | — |
+| 機械狼開頭那一輪 | **每晚都有**，就算沒技能可用也要給開刀手勢 | — |
+| 機械狼（學到狼人）的兩刀 | 第一刀在開頭那一輪，第二刀在狼人那一格 | — |
+| 機械狼學習對象 | 不能選自己 | — |
+| 機械狼學到平民／白痴／騎士 | 無夜間技能，之後不再叫起來 | — |
+| 任一身分全滅 | 該步驟保留為走過場，照常喊、照常停頓，不跳過 | — |
 
 ## 發言順序
 

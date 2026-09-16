@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/game_state.dart';
 import '../../core/models/night_action.dart';
+import '../../core/models/role.dart';
 import '../../shared/theme.dart';
 import 'night_flow_page.dart';
 
@@ -103,6 +104,70 @@ class NightResultPage extends StatelessWidget {
                   outcome.seerSawWolf ? WgmTheme.wolfColor : WgmTheme.godColor,
               title: '預言家查驗 ${outcome.seerTarget} 號',
               body: outcome.seerSawWolf ? '結果：查殺（狼人）' : '結果：金水（好人）',
+            ),
+
+          // ---- 通靈師查驗結果 ----
+          // 通靈師看到的是真實身分，不是好人／狼人，所以要把角色名寫出來。
+          if (outcome.psychicResult != null)
+            _InfoCard(
+              icon: Icons.auto_awesome_rounded,
+              iconColor:
+                  outcome.psychicResult!.revealedRole?.camp == Camp.wolf
+                      ? WgmTheme.wolfColor
+                      : WgmTheme.godColor,
+              title: '通靈師查驗 ${outcome.psychicResult!.seat} 號',
+              body: '真實身分：'
+                  '${outcome.psychicResult!.revealedRole?.nameZh ?? "尚未登記"}',
+            ),
+
+          // ---- 機械狼 ----
+          if (outcome.mechanicLearnedRole != null)
+            _InfoCard(
+              icon: Icons.memory_rounded,
+              iconColor: WgmTheme.wolfColor,
+              title: '機械狼學習了 ${outcome.mechanicLearnedRole!.nameZh}',
+              body: '技能自**下一夜**起生效，整局只能學這一次。',
+            ),
+          if (outcome.mechanicSeerTarget != null)
+            _InfoCard(
+              icon: Icons.memory_rounded,
+              iconColor: outcome.mechanicSeerSawWolf
+                  ? WgmTheme.wolfColor
+                  : WgmTheme.godColor,
+              title: '機械狼查驗 ${outcome.mechanicSeerTarget} 號',
+              body: outcome.mechanicSeerSawWolf ? '結果：查殺（狼人）' : '結果：金水（好人）',
+            ),
+          if (outcome.mechanicPsychicResult != null)
+            _InfoCard(
+              icon: Icons.memory_rounded,
+              iconColor: WgmTheme.godColor,
+              title: '機械狼查驗 ${outcome.mechanicPsychicResult!.seat} 號',
+              body: '真實身分：'
+                  '${outcome.mechanicPsychicResult!.revealedRole?.nameZh ?? "尚未登記"}',
+            ),
+
+          if (outcome.shieldBrokenSeats.isNotEmpty)
+            _InfoCard(
+              icon: Icons.shield_outlined,
+              iconColor: WgmTheme.wolfColor,
+              title: '破盾：${outcome.shieldBrokenSeats.join('、')} 號',
+              body: '機械狼（已學到狼人）雙刀集中，守衛的守護與女巫的解藥都被打穿。',
+            ),
+          if (outcome.poisonReflectedTo != null)
+            _InfoCard(
+              icon: Icons.u_turn_left_rounded,
+              iconColor: WgmTheme.wolfColor,
+              title: '毒藥反彈到 ${outcome.poisonReflectedTo} 號',
+              body: '目標被機械狼（已學到守衛）守住，毒反噬下毒的人。',
+            ),
+
+          // ---- 殉情 ----
+          if (outcome.charmSuicideSeat != null)
+            _InfoCard(
+              icon: Icons.favorite_rounded,
+              iconColor: WgmTheme.wolfColor,
+              title: '${outcome.charmSuicideSeat} 號殉情',
+              body: '狼美人出局，被魅惑者隨之死亡。',
             ),
 
           // ---- 裁決說明 ----

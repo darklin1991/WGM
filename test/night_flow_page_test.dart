@@ -249,15 +249,22 @@ void main() {
       expect(state.playerAt(7).alive, isFalse, reason: '獵人被毒死');
     });
 
-    testWidgets('已出局的角色不再被叫起來', (tester) async {
+    // 跳過死掉的身分，玩家馬上就從流程長度聽出誰出局了 ——
+    // 所以每個身分每晚都照喊，只是沒有東西要收。
+    testWidgets('已出局的角色仍要照常喊，但沒有技能可收', (tester) async {
       final state = seeded();
       state.playerAt(8).alive = false; // 守衛出局
       state.playerAt(5).alive = false; // 預言家出局
 
       await tester.pumpWidget(_wrap(NightFlowPage(state: state)));
 
-      // 守衛已死 → 第一個步驟應直接跳到狼人。
+      // 守衛已死 → 照常喊，但問不到守誰。
+      expect(find.text('守衛請睜眼'), findsOneWidget);
       expect(find.text('守衛要守誰？'), findsNothing);
+      expect(find.textContaining('照常喊'), findsWidgets);
+      await _next(tester);
+
+      // 狼人還活著 → 照常行動。
       expect(find.text('狼人要刀誰？'), findsOneWidget);
       await _tapSeat(tester, 10);
       await _next(tester);
@@ -266,9 +273,36 @@ void main() {
       await _next(tester);
       await _next(tester);
 
-      // 預言家已死 → 直接跳到獵人。
+      // 預言家已死 → 一樣照常喊。
+      expect(find.text('預言家請睜眼'), findsOneWidget);
       expect(find.text('預言家要查驗誰？'), findsNothing);
+      await _next(tester);
+
       expect(find.text('獵人請睜眼'), findsOneWidget);
+    });
+
+    // 直接跳過「狼人請睜眼」，玩家馬上從流程長度聽出狼死光了。
+    testWidgets('狼隊全滅時仍要照常喊一次，只是沒有東西可收', (tester) async {
+      final state = seeded();
+      for (final seat in [1, 2, 3, 4]) {
+        state.playerAt(seat).alive = false;
+      }
+
+      await tester.pumpWidget(_wrap(NightFlowPage(state: state)));
+
+      // 守衛先守。
+      expect(find.text('守衛要守誰？'), findsOneWidget);
+      await _tapSeat(tester, 9);
+      await _next(tester);
+
+      // 狼隊那一步保留，但變成走過場 —— 沒有刀口可選。
+      expect(find.text('狼人請睜眼'), findsOneWidget);
+      expect(find.text('狼人要刀誰？'), findsNothing);
+      expect(find.textContaining('照常喊'), findsWidgets);
+      await _next(tester);
+
+      // 接著照常進入女巫。
+      expect(find.textContaining('女巫'), findsWidgets);
     });
 
     testWidgets('狼隊只要還有一匹狼存活就照樣行動', (tester) async {
@@ -312,5 +346,119 @@ void main() {
     expect(find.text('狼人請睜眼'), findsOneWidget);
     await _tapSeat(tester, 8);
     expect(find.text('請選滿 4 位（已選 0）'), findsOneWidget);
+  });
+
+  group('機械狼帶刀（12人 機械狼通靈師）', () {
+    Preset mechanicPreset() => Preset.fromJson(
+          const {
+            'presetId': 'jx',
+            'name': '機械狼通靈師',
+            'playerCount': 12,
+            'roles': [
+              {'role': 'wolf', 'count': 3},
+              {'role': 'mechanicWolf', 'count': 1},
+              {'role': 'psychic', 'count': 1},
+              {'role': 'witch', 'count': 1},
+              {'role': 'hunter', 'count': 1},
+              {'role': 'guard', 'count': 1},
+              {'role': 'villager', 'count': 4},
+            ],
+            'nightOrder': [
+              'mechanicWolf',
+              'guard',
+              'wolf',
+              'witch',
+              'hunter',
+              'psychic',
+            ],
+          },
+          sourceName: 'jx.json',
+        );
+
+    /// 第二夜起：身分已登記，小狼全滅，機械狼首夜學到狼人。
+    GameState loneMechanic() {
+      final state = GameState(preset: mechanicPreset());
+      void set(int seat, Role role) => state.playerAt(seat).role = role;
+      for (final s in [1, 2, 3]) {
+        set(s, Roles.wolf);
+      }
+      set(4, Roles.mechanicWolf);
+      set(5, Roles.psychic);
+      set(6, Roles.witch);
+      set(7, Roles.hunter);
+      set(8, Roles.guard);
+      for (var i = 9; i <= 12; i++) {
+        set(i, Roles.villager);
+      }
+      for (final s in [1, 2, 3]) {
+        state.playerAt(s).alive = false; // 小狼全滅
+      }
+      state
+        ..dayNumber = 1
+        ..mechanicWolfLearnedRole = Roles.wolf
+        ..mechanicWolfLearnedNight = 1;
+      return state;
+    }
+
+    testWidgets('第一刀在開頭那一輪，第二刀在狼人那一格', (tester) async {
+      final state = loneMechanic();
+      await tester.pumpWidget(_wrap(NightFlowPage(state: state)));
+
+      // ---- 第 1 格：機械狼的開刀手勢 ----
+      expect(find.text('機械狼請睜眼'), findsOneWidget);
+      expect(find.textContaining('今晚有刀'), findsWidgets);
+      await _next(tester);
+
+      // 第一刀砍 9 號。
+      expect(find.text('機械狼第一刀要砍誰？'), findsOneWidget);
+      await _tapSeat(tester, 9);
+      await _next(tester);
+
+      // ---- 第 2 格：守衛守 9 號 ----
+      expect(find.text('守衛要守誰？'), findsOneWidget);
+      await _tapSeat(tester, 9);
+      await _next(tester);
+
+      // ---- 第 3 格：原本的狼人位置，改問第二刀 ----
+      expect(find.text('機械狼第二刀要砍誰？'), findsOneWidget);
+      await _tapSeat(tester, 9); // 集中同一人 → 破盾
+      await _next(tester);
+
+      // ---- 女巫：不用藥 ----
+      await _next(tester);
+      await _next(tester);
+      // ---- 獵人手勢 ----
+      await _next(tester);
+      // ---- 通靈師不查 ----
+      await _next(tester);
+
+      // 兩刀集中 9 號，守衛守了也沒用。
+      expect(find.byType(NightResultPage), findsOneWidget);
+      expect(state.playerAt(9).alive, isFalse);
+    });
+
+    testWidgets('沒學到狼人時，狼人那一格是走過場', (tester) async {
+      final state = loneMechanic()..mechanicWolfLearnedRole = Roles.guard;
+      await tester.pumpWidget(_wrap(NightFlowPage(state: state)));
+
+      // 開刀手勢 → 第一刀（沒有「第一刀」的字樣，因為只有一刀）。
+      await _next(tester);
+      expect(find.text('機械狼要刀誰？'), findsOneWidget);
+      await _tapSeat(tester, 10);
+      await _next(tester);
+
+      // 學到守衛 → 接著守誰。
+      expect(find.text('機械狼（守衛）要守誰？'), findsOneWidget);
+      await _next(tester);
+
+      // 守衛。
+      expect(find.text('守衛要守誰？'), findsOneWidget);
+      await _next(tester);
+
+      // 狼人那一格：走過場，沒有第二刀。
+      expect(find.text('狼人請睜眼'), findsOneWidget);
+      expect(find.text('機械狼第二刀要砍誰？'), findsNothing);
+      expect(find.textContaining('照常喊'), findsWidgets);
+    });
   });
 }
