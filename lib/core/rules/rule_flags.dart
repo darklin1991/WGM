@@ -60,7 +60,44 @@ class RuleFlags {
     this.tieBreak = TieBreak.pkThenNone,
     this.winCondition = WinCondition.sideElimination,
     this.wolfSelfDetonateEndsDay = true,
+    this.charmCannotRepeatTarget = true,
+    this.wolfBeautyCannotSelfKill = true,
+    this.knightDuelBlocksCharmSuicide = true,
+    this.knightDuelEndsDay = true,
+    this.mechanicWolfLearnOnce = true,
+    this.mechanicGuardReflectsPoison = true,
+    this.mechanicDoubleKnifeBreaksShield = true,
   });
+
+  /// 機械狼（學到守衛）的守護是否會把毒藥**反彈給下毒的人**。
+  ///
+  /// 這是機械狼版守衛比一般守衛強的地方 —— 一般守衛防不了毒。
+  final bool mechanicGuardReflectsPoison;
+
+  /// 機械狼（學到狼人）雙刀集中同一人時，是否破盾。
+  ///
+  /// 破盾會讓**守衛的守護與女巫的解藥都失效**，目標必死；
+  /// 因此也不會構成同守同救。
+  final bool mechanicDoubleKnifeBreaksShield;
+
+  /// 狼美人是否不可連續兩晚魅惑同一人（應在輸入階段就擋住）。
+  final bool charmCannotRepeatTarget;
+
+  /// 狼美人是否不能自刀（狼隊不可把刀指向狼美人自己）。
+  final bool wolfBeautyCannotSelfKill;
+
+  /// 狼美人被騎士決鬥致死時，殉情是否不發動。
+  ///
+  /// 多數賽制為 true —— 騎士決鬥掉狼美人可以救下被魅惑者。
+  final bool knightDuelBlocksCharmSuicide;
+
+  /// 騎士決鬥到狼人後，是否立即結束白天進入黑夜（跳過投票）。
+  ///
+  /// 決鬥到好人時騎士出局，白天照常繼續，不受此旗標影響。
+  final bool knightDuelEndsDay;
+
+  /// 機械狼是否整局只能學習一次。
+  final bool mechanicWolfLearnOnce;
 
   /// 同守同救（奶穿）是否致死。true 為多數賽制。
   final bool guardHealKills;
@@ -182,6 +219,26 @@ class RuleFlags {
       wolfSelfDetonateEndsDay: readBool(
         'wolfSelfDetonateEndsDay',
         defaults.wolfSelfDetonateEndsDay,
+      ),
+      charmCannotRepeatTarget:
+          readBool('charmCannotRepeatTarget', defaults.charmCannotRepeatTarget),
+      wolfBeautyCannotSelfKill:
+          readBool('wolfBeautyCannotSelfKill', defaults.wolfBeautyCannotSelfKill),
+      knightDuelBlocksCharmSuicide: readBool(
+        'knightDuelBlocksCharmSuicide',
+        defaults.knightDuelBlocksCharmSuicide,
+      ),
+      knightDuelEndsDay:
+          readBool('knightDuelEndsDay', defaults.knightDuelEndsDay),
+      mechanicWolfLearnOnce:
+          readBool('mechanicWolfLearnOnce', defaults.mechanicWolfLearnOnce),
+      mechanicGuardReflectsPoison: readBool(
+        'mechanicGuardReflectsPoison',
+        defaults.mechanicGuardReflectsPoison,
+      ),
+      mechanicDoubleKnifeBreaksShield: readBool(
+        'mechanicDoubleKnifeBreaksShield',
+        defaults.mechanicDoubleKnifeBreaksShield,
       ),
     );
   }
