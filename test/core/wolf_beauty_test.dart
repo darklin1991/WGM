@@ -88,12 +88,13 @@ void main() {
       expect(o.charmSuicideSeat, isNull);
     });
 
-    test('本晚未重新魅惑 → 沿用前一晚的魅惑對象', () {
+    test('本晚沒魅惑 → 就是沒魅惑，前一晚的對象不算數', () {
       final s = _state()..charmedSeat = 11;
       final o = _arb.settle(s, _actions(night: 2, wolf: 9, poison: 4));
 
-      expect(_deathMap(o)[11], DeathCause.loveSuicide);
-      expect(o.charmSuicideSeat, 11);
+      expect(_deathMap(o).containsKey(11), isFalse,
+          reason: '狼美人本晚沒指定對象，11 號的魅惑已解除，不殉情');
+      expect(o.charmSuicideSeat, isNull);
     });
 
     test('被魅惑者本夜已因他故死亡 → 不重複記死因', () {
@@ -154,7 +155,7 @@ void main() {
   });
 
   group('套用結果到狀態', () {
-    test('魅惑對象寫入狀態並沿用到下一夜', () {
+    test('魅惑對象寫入狀態，供白天的放逐／決鬥判定殉情', () {
       final s = _state();
       final a = _actions(wolf: 9, charm: 10);
       _arb.apply(s, a, _arb.settle(s, a));
@@ -163,13 +164,29 @@ void main() {
       expect(s.lastCharmTarget, 10);
     });
 
-    test('本晚沒重新魅惑時，charmedSeat 維持不變', () {
+    test('本晚沒魅惑時，前一晚的魅惑一併解除', () {
       final s = _state()..charmedSeat = 11;
       final a = _actions(night: 2, wolf: 9);
       _arb.apply(s, a, _arb.settle(s, a));
 
-      expect(s.charmedSeat, 11, reason: '沒指定新對象就沿用');
+      expect(s.charmedSeat, isNull, reason: '沒選就是沒魅惑，不沿用');
       expect(s.lastCharmTarget, isNull, reason: '本晚沒魅惑，隔晚就沒有連魅限制');
+    });
+
+    test('換魅惑對象時，前一位不再被魅惑', () {
+      final s = _state();
+      final a1 = _actions(wolf: 9, charm: 10);
+      _arb.apply(s, a1, _arb.settle(s, a1));
+
+      final a2 = _actions(night: 2, wolf: 12, charm: 11);
+      final o2 = _arb.settle(s, a2);
+      _arb.apply(s, a2, o2);
+
+      expect(s.charmedSeat, 11);
+
+      // 第 3 夜毒死狼美人，殉情的是 11 號而不是 10 號。
+      final a3 = _actions(night: 3, poison: 4, charm: 11);
+      expect(_arb.settle(s, a3).charmSuicideSeat, 11);
     });
 
     test('深拷貝要帶上狼美人的欄位，否則撤銷會壞掉', () {

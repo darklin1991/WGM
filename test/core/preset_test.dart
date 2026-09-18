@@ -148,6 +148,95 @@ void main() {
       );
     });
 
+    // 引擎用 seatOfRole 找身分，只會回傳第一個 —— 多填第二位的技能會直接消失。
+    test('一般狼與平民以外的身分只能有 1 位', () {
+      expect(
+        () => _parse(_base(roles: const [
+          {'role': 'wolf', 'count': 3},
+          {'role': 'seer', 'count': 1},
+          {'role': 'witch', 'count': 2},
+          {'role': 'villager', 'count': 3},
+        ])),
+        throwsA(isA<PresetFormatException>()
+            .having((e) => e.field, 'field', 'roles[2].count')
+            .having((e) => e.message, 'message', contains('只能有 1 位'))),
+      );
+    });
+
+    test('一般狼與平民可以多位', () {
+      final p = _parse(_base(
+        playerCount: 10,
+        roles: const [
+          {'role': 'wolf', 'count': 4},
+          {'role': 'seer', 'count': 1},
+          {'role': 'witch', 'count': 1},
+          {'role': 'villager', 'count': 4},
+        ],
+      ));
+
+      expect(p.wolfCount, 4);
+      expect(p.villagerCount, 4);
+    });
+
+    test('同一角色重複列出', () {
+      expect(
+        () => _parse(_base(roles: const [
+          {'role': 'wolf', 'count': 3},
+          {'role': 'seer', 'count': 1},
+          {'role': 'witch', 'count': 1},
+          {'role': 'witch', 'count': 1},
+          {'role': 'villager', 'count': 3},
+        ])),
+        throwsA(isA<PresetFormatException>()
+            .having((e) => e.field, 'field', 'roles[3].role')
+            .having((e) => e.message, 'message', contains('重複'))),
+      );
+    });
+
+    // 漏排的角色會被流程產生器默默接在最後，法官照著跑就會出錯 ——
+    // 例如漏了女巫，獵人的開槍手勢會在毒還沒收之前就給出去。
+    test('有夜間行動的角色沒排進 nightOrder', () {
+      expect(
+        () => _parse(_base(nightOrder: const ['wolf', 'seer'])), // 漏了女巫
+        throwsA(isA<PresetFormatException>()
+            .having((e) => e.field, 'field', 'nightOrder')
+            .having((e) => e.message, 'message', contains('女巫'))),
+      );
+    });
+
+    test('沒有夜間行動的角色不必排進 nightOrder', () {
+      // 獵人只需要手勢、白痴只需登記，兩者都不在 nightOrder 裡也合法。
+      final p = _parse(_base(
+        playerCount: 10,
+        roles: const [
+          {'role': 'wolf', 'count': 3},
+          {'role': 'seer', 'count': 1},
+          {'role': 'witch', 'count': 1},
+          {'role': 'hunter', 'count': 1},
+          {'role': 'idiot', 'count': 1},
+          {'role': 'villager', 'count': 3},
+        ],
+      ));
+
+      expect(p.nightOrder.map((r) => r.id), ['wolf', 'witch', 'seer']);
+    });
+
+    test('狼隊成員與一般狼合併成一步，只列 wolf 就算涵蓋狼王', () {
+      final p = _parse(_base(
+        playerCount: 10,
+        roles: const [
+          {'role': 'wolf', 'count': 3},
+          {'role': 'wolfKing', 'count': 1},
+          {'role': 'seer', 'count': 1},
+          {'role': 'witch', 'count': 1},
+          {'role': 'villager', 'count': 4},
+        ],
+        nightOrder: const ['wolf', 'witch', 'seer'], // 沒列 wolfKing
+      ));
+
+      expect(p.wolfCount, 4);
+    });
+
     test('無法辨識的 tieBreak 值', () {
       expect(
         () => _parse(_base(rules: const {'tieBreak': 'coin_flip'})),

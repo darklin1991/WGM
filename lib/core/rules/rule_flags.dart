@@ -64,10 +64,15 @@ class RuleFlags {
     this.wolfBeautyCannotSelfKill = true,
     this.knightDuelBlocksCharmSuicide = true,
     this.knightDuelEndsDay = true,
-    this.mechanicWolfLearnOnce = true,
     this.mechanicGuardReflectsPoison = true,
     this.mechanicDoubleKnifeBreaksShield = true,
+    this.sheriffElection = true,
   });
+
+  /// 本局是否有警長競選（警長局）。
+  ///
+  /// 關掉的話第一天直接公布死訊，不跑上警流程。
+  final bool sheriffElection;
 
   /// 機械狼（學到守衛）的守護是否會把毒藥**反彈給下毒的人**。
   ///
@@ -95,9 +100,6 @@ class RuleFlags {
   ///
   /// 決鬥到好人時騎士出局，白天照常繼續，不受此旗標影響。
   final bool knightDuelEndsDay;
-
-  /// 機械狼是否整局只能學習一次。
-  final bool mechanicWolfLearnOnce;
 
   /// 同守同救（奶穿）是否致死。true 為多數賽制。
   final bool guardHealKills;
@@ -230,8 +232,6 @@ class RuleFlags {
       ),
       knightDuelEndsDay:
           readBool('knightDuelEndsDay', defaults.knightDuelEndsDay),
-      mechanicWolfLearnOnce:
-          readBool('mechanicWolfLearnOnce', defaults.mechanicWolfLearnOnce),
       mechanicGuardReflectsPoison: readBool(
         'mechanicGuardReflectsPoison',
         defaults.mechanicGuardReflectsPoison,
@@ -240,6 +240,7 @@ class RuleFlags {
         'mechanicDoubleKnifeBreaksShield',
         defaults.mechanicDoubleKnifeBreaksShield,
       ),
+      sheriffElection: readBool('sheriffElection', defaults.sheriffElection),
     );
   }
 

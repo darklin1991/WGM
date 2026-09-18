@@ -32,9 +32,7 @@ class _PresetListPageState extends State<PresetListPage> {
   /// 不需要事先把 12 個身分都填完。
   void _startFirstNight(Preset preset) {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => NightFlowPage(state: GameState(preset: preset)),
-      ),
+      NightFlowPage.route(GameState(preset: preset)),
     );
   }
 

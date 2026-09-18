@@ -78,7 +78,11 @@ class GameState {
 
   // ---- 狼美人 ----
 
-  /// 目前被狼美人魅惑的座次。狼美人出局時，這位殉情。
+  /// 昨晚被狼美人魅惑的座次。狼美人出局時，這位殉情。
+  ///
+  /// **每晚重設** —— 狼美人沒選就是沒魅惑，不會沿用前一晚的對象。
+  /// 留著這個欄位是給白天用的：狼美人被放逐或被騎士決鬥掉時，
+  /// 殉情的對象就是昨晚指定的那位。
   int? charmedSeat;
 
   /// 狼美人前一晚魅惑的座次，用於「不可連續兩晚魅惑同一人」的檢查。
@@ -136,8 +140,21 @@ class GameState {
   /// 機械狼是否已經獨自帶刀 —— 其餘小狼（含狼王、狼美人）全數出局時才成立。
   ///
   /// 板子裡沒有機械狼時回傳 false。
+  ///
+  /// **狼隊還沒登記完時一律回傳 false。** 首夜機械狼第一個睜眼，那時小狼的
+  /// 身分都還沒登記，光看「場上有沒有活著的狼隊成員」會誤判成狼隊全滅，
+  /// 機械狼首夜就拿到刀。
   bool get mechanicWolfCarriesKnife {
     if (seatOfRole(Roles.mechanicWolf.id) == null) return false;
+
+    final configured = preset.roles
+        .where((s) => Roles.wolfTeamIds.contains(s.role.id))
+        .fold<int>(0, (sum, s) => sum + s.count);
+    final registered = players
+        .where((p) => p.role != null && Roles.wolfTeamIds.contains(p.role!.id))
+        .length;
+    if (registered < configured) return false;
+
     return !players.any(
       (p) =>
           p.alive &&
@@ -230,6 +247,32 @@ class GameState {
   /// 依身分找所有座次（狼隊等多人角色用）。
   List<int> seatsOfRole(String roleId) =>
       players.where((p) => p.role?.id == roleId).map((p) => p.seat).toList();
+
+  /// 從快照就地還原（撤銷用）。
+  ///
+  /// **新增欄位時必須同步修改這裡與 [copy]** —— 漏一個欄位撤銷就會留下殘影。
+  ///
+  /// 刻意不換物件：頁面、狀態機到處持有同一個 [GameState] 參照，
+  /// 就地覆寫才不必把參照全部重新接一遍。[preset] 是不可變設定，不必還原。
+  void restoreFrom(GameState snapshot) {
+    for (var i = 0; i < players.length; i++) {
+      players[i].restoreFrom(snapshot.players[i]);
+    }
+    dayNumber = snapshot.dayNumber;
+    phase = snapshot.phase;
+    sheriffSeat = snapshot.sheriffSeat;
+    witchAntidoteAvailable = snapshot.witchAntidoteAvailable;
+    witchPoisonAvailable = snapshot.witchPoisonAvailable;
+    lastGuardTarget = snapshot.lastGuardTarget;
+    charmedSeat = snapshot.charmedSeat;
+    lastCharmTarget = snapshot.lastCharmTarget;
+    mechanicWolfLearnedRole = snapshot.mechanicWolfLearnedRole;
+    mechanicWolfLearnedNight = snapshot.mechanicWolfLearnedNight;
+    mechanicPoisonAvailable = snapshot.mechanicPoisonAvailable;
+    lastMechanicGuardTarget = snapshot.lastMechanicGuardTarget;
+    mechanicCharmedSeat = snapshot.mechanicCharmedSeat;
+    lastMechanicCharmTarget = snapshot.lastMechanicCharmTarget;
+  }
 
   /// 深拷貝快照，供撤銷使用。
   ///

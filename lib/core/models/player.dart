@@ -49,6 +49,22 @@ class Player {
   /// 持續性資訊標記。
   final Set<InfoTag> infoTags = <InfoTag>{};
 
+  /// 從快照就地還原。**新增欄位時必須同步修改這裡與 [copy]。**
+  ///
+  /// 不換物件而是就地覆寫，因為 [GameState.players] 是不可變長度的清單，
+  /// 到處都持有 Player 的參照。
+  void restoreFrom(Player snapshot) {
+    role = snapshot.role;
+    alive = snapshot.alive;
+    canVote = snapshot.canVote;
+    nightFacts
+      ..clear()
+      ..addAll(snapshot.nightFacts);
+    infoTags
+      ..clear()
+      ..addAll(snapshot.infoTags);
+  }
+
   /// 深拷貝。**新增欄位時必須同步修改這裡** —— 漏拷貝一層會導致
   /// 修改現況時連快照一起變，撤銷功能就壞了。
   Player copy() {

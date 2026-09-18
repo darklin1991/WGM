@@ -135,7 +135,7 @@ class _PlayerRegistryPageState extends State<PlayerRegistryPage> {
   void _startGame() {
     _state.dayNumber = 0;
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => NightFlowPage(state: _state)),
+      NightFlowPage.route(_state),
     );
   }
 }

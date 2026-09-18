@@ -129,6 +129,20 @@ class NightArbitrator {
       }
     }
 
+    // 狼王：**被自刀出局才能開槍**，同時吃毒也不影響；沒被自刀而死就是被毒，
+    // 不能開。狼隊自己知道有沒有自刀，所以狼王不需要每晚給手勢。
+    // 注意這裡看的是「有沒有被刀」而不是死因 —— 刀＋毒的死因會記成毒。
+    var wolfKingMayShoot = false;
+    final wolfKingSeat = state.seatOfRole(Roles.wolfKing.id);
+    if (wolfKingSeat != null && deaths.containsKey(wolfKingSeat)) {
+      if (actions.wolfTargets.contains(wolfKingSeat)) {
+        wolfKingMayShoot = true;
+        notes.add('狼王（$wolfKingSeat 號）被自刀出局，可以開槍');
+      } else {
+        notes.add('狼王（$wolfKingSeat 號）未被自刀而出局（被毒），不可開槍');
+      }
+    }
+
     // 機械狼學到槍牌（獵人／狼王）：**只有吃刀或吃推**才能開槍。
     // 吃毒不能開，殉情之類的其他死法也不能 —— 比獵人本人的條件嚴格。
     final mechanicSeat = state.seatOfRole(Roles.mechanicWolf.id);
@@ -205,6 +219,7 @@ class NightArbitrator {
       seerTarget: seerTarget,
       seerSawWolf: seerSawWolf,
       hunterMayShoot: hunterMayShoot,
+      wolfKingMayShoot: wolfKingMayShoot,
       psychicResult: psychicResult,
       mechanicLearnedRole: mechanicLearnedRole,
       mechanicSeerTarget: mechanicSeerTarget,
@@ -241,14 +256,11 @@ class NightArbitrator {
       notes.add('$label（$seat 號）出局，$charmedNow 號殉情');
     }
 
-    check(
-      Roles.wolfBeauty.id,
-      actions.wolfBeautyCharmTarget ?? state.charmedSeat,
-      '狼美人',
-    );
+    // 魅惑只看**本晚指定的對象** —— 沒選就是沒魅惑，不沿用前一晚的。
+    check(Roles.wolfBeauty.id, actions.wolfBeautyCharmTarget, '狼美人');
     check(
       Roles.mechanicWolf.id,
-      actions.mechanicCharmTarget ?? state.mechanicCharmedSeat,
+      actions.mechanicCharmTarget,
       '機械狼（已學到狼美人）',
     );
 
@@ -366,13 +378,11 @@ class NightArbitrator {
       state.mechanicWolfLearnedNight = actions.night;
     }
 
-    // 魅惑對象沿用到下一夜，直到重新指定。
-    if (actions.wolfBeautyCharmTarget != null) {
-      state.charmedSeat = actions.wolfBeautyCharmTarget;
-    }
-    if (actions.mechanicCharmTarget != null) {
-      state.mechanicCharmedSeat = actions.mechanicCharmTarget;
-    }
+    // 魅惑每晚重設：**沒選就是沒魅惑**，前一晚的對象一併解除。
+    // 存進狀態是為了白天用 —— 狼美人若被放逐或被騎士決鬥掉，
+    // 殉情的對象就是昨晚指定的那位。
+    state.charmedSeat = actions.wolfBeautyCharmTarget;
+    state.mechanicCharmedSeat = actions.mechanicCharmTarget;
 
     for (final d in outcome.deaths) {
       state.playerAt(d.seat).alive = false;
