@@ -17,7 +17,6 @@
     "witchDualUseSameNight": false,
     "guardCannotRepeatTarget": true,
     "poisonedHunterCannotShoot": true,
-    "mechanicWolfLearnOnce": true,
     "sheriffVoteWeight": 1.5,
     "tieBreak": "pk_then_none",
     "winCondition": "sideElimination",

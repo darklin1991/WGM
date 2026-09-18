@@ -1,406 +1,107 @@
 import 'package:flutter/material.dart';
 
-import '../../core/engine/night_arbitrator.dart';
 import '../../core/engine/night_flow.dart';
+import '../../core/engine/night_flow_machine.dart';
 import '../../core/models/game_state.dart';
 import '../../core/models/night_action.dart';
 import '../../core/models/role.dart';
 import '../../shared/theme.dart';
+import '../day/sheriff_election_page.dart';
 import 'night_result_page.dart';
 import 'seat_picker.dart';
 
-/// 一個步驟內的子階段。
-enum _Sub {
-  /// 登記座次：「守衛請睜眼，你是幾號」。
-  registerSeats,
-
-  /// 狼隊登記完後指認特殊成員（狼王、狼美人）。
-  pickSpecial,
-
-  /// 選擇技能目標。
-  chooseTarget,
-
-  /// 夜晚結尾：法官告知機械狼學到的身分，並給開槍手勢。
-  mechanicReveal,
-
-  /// 機械狼那一輪的第一段：法官比手勢告知今晚有沒有刀。
-  ///
-  /// 機械狼不與小狼相認，自己不知道小狼死光了沒，所以每晚都要給這個手勢。
-  mechanicKnifeGesture,
-
-  /// 機械狼帶刀時的刀口。
-  mechanicKnife,
-
-  /// 機械狼帶刀且學到狼人時，多出來的第二刀。
-  ///
-  /// 與第一刀分成兩個子階段，才選得到「兩刀集中同一人」（破盾）。
-  secondKnife,
-
-  /// 女巫：是否對刀口下解藥。
-  witchHeal,
-
-  /// 女巫：是否毒人。
-  witchPoison,
-
-  /// 獵人：法官給「可否開槍」的手勢。
-  hunterGesture,
-
-  /// 走過場：這一步的角色已全部出局，但仍要照常喊一次再閉眼。
-  ///
-  /// 直接跳過會讓玩家從流程長度聽出誰死光了。
-  passThrough,
-}
-
 /// 夜晚流程頁。
 ///
-/// 首夜的流程是「先登記是誰，再發動技能」，依板子的夜晚順序逐一進行；
-/// 第二夜起身分已知，直接收集技能目標。
-/// 走完所有特殊身分後，剩下的座次自動填為平民。
+/// 流程本身（哪一步接哪一步、什麼可選、目標記到哪個欄位）全在
+/// [NightFlowMachine] 裡 —— 那是規則，用純 Dart 單元測試涵蓋。
+/// 這一頁只負責把狀態機的狀態畫出來，並把操作轉回去。
+///
+/// **不要在這裡改 [GameState]** —— 進入夜晚（`dayNumber++`、`phase`）由呼叫端
+/// 在 push 之前做，撤銷快照才有地方存。
 class NightFlowPage extends StatefulWidget {
   const NightFlowPage({super.key, required this.state});
 
   final GameState state;
+
+  /// 推進到下一夜並開啟夜晚流程頁。
+  ///
+  /// 狀態變更集中在這裡，頁面本身不碰 —— 法官若在夜晚中途退出，
+  /// 至少 `dayNumber` 已經是正確的那一夜，而不是靠頁面的 initState 副作用。
+  static Route<void> route(GameState state) {
+    enterNight(state);
+    return MaterialPageRoute(builder: (_) => NightFlowPage(state: state));
+  }
+
+  /// 把狀態推進到下一夜。[route] 會先呼叫它。
+  ///
+  /// 單獨公開是為了讓測試（與日後的撤銷堆疊）能在建立頁面之前先存快照。
+  static void enterNight(GameState state) {
+    final isFirstNight = state.dayNumber == 0;
+    state
+      ..dayNumber = isFirstNight ? 1 : state.dayNumber + 1
+      ..phase = GamePhase.night;
+  }
 
   @override
   State<NightFlowPage> createState() => _NightFlowPageState();
 }
 
 class _NightFlowPageState extends State<NightFlowPage> {
-  static const _arbitrator = NightArbitrator();
-
-  GameState get _state => widget.state;
-
-  late final bool _isFirstNight;
-  late final List<NightStep> _steps;
-  late final NightActions _actions;
-
-  int _stepIndex = 0;
-  _Sub _sub = _Sub.registerSeats;
-  final Set<int> _picked = {};
-
-  /// 目前正在指認第幾個特殊狼隊成員（[NightStep.specialPicks] 的索引）。
-  int _specialIndex = 0;
+  late final NightFlowMachine _m;
 
   @override
   void initState() {
     super.initState();
-    _isFirstNight = _state.dayNumber == 0;
-    _state.dayNumber = _isFirstNight ? 1 : _state.dayNumber + 1;
-    _state.phase = GamePhase.night;
-    _steps = _isFirstNight
-        ? NightFlow.firstNightSteps(_state.preset)
-        : NightFlow.laterNightStepsFor(_state, night: _state.dayNumber);
-    _actions = NightActions(night: _state.dayNumber);
-    // 沒有步驟會被跳過 —— 角色全滅的步驟改走過場，見 [_isPassThrough]。
-    _stepIndex = 0;
-    _sub = _initialSubFor(_step);
-  }
-
-  NightStep get _step => _steps[_stepIndex];
-
-  _Sub _initialSubFor(NightStep step) {
-    if (_isPassThrough(step)) {
-      // 機械狼學到狼人時，狼隊這一格就是牠的第二刀 ——
-      // 第一刀在自己那一輪（夜晚開頭）已經砍過了。
-      if (step.skill == NightSkill.wolfKill && _hasExtraKnife) {
-        return _Sub.secondKnife;
-      }
-      return _Sub.passThrough;
-    }
-    if (_isFirstNight && step.seatCount > 0) return _Sub.registerSeats;
-    // 機械狼學到女巫只拿得到毒藥，沒有解藥，所以直接跳到毒藥。
-    if (step.skill == NightSkill.witchPotion) {
-      return step.byMechanicWolf ? _Sub.witchPoison : _Sub.witchHeal;
-    }
-    if (step.skill == NightSkill.hunterGesture) return _Sub.hunterGesture;
-    if (step.skill == NightSkill.mechanicReveal) return _Sub.mechanicReveal;
-    // 機械狼那一輪永遠從開刀手勢開始。
-    if (step.skill == NightSkill.mechanicTurn) return _Sub.mechanicKnifeGesture;
-    return _Sub.chooseTarget;
-  }
-
-  /// 該步驟的角色是否全部出局。
-  bool _allRolesDead(NightStep step) {
-    for (final role in step.roles) {
-      final alive = _state
-          .seatsOfRole(role.id)
-          .any((seat) => _state.playerAt(seat).alive);
-      if (alive) return false;
-    }
-    return true;
-  }
-
-  /// 角色已全部出局，但仍要照常喊一次的步驟。
-  ///
-  /// **每個角色都適用。** 法官若因為某個身分死光就不喊它，玩家馬上就從
-  /// 流程長度聽出誰出局了 —— 所以照喊不誤，只是沒有東西要收。
-  bool _isPassThrough(NightStep step) => !_isFirstNight && _allRolesDead(step);
-
-  /// 尚未登記身分的座次 —— 登記階段只能從這裡挑。
-  Set<int> get _unassignedSeats => _state.players
-      .where((p) => p.role == null)
-      .map((p) => p.seat)
-      .toSet();
-
-  /// 目前要指認的特殊狼隊成員（狼王／狼美人）。
-  Role get _specialRole => _step.specialPicks[_specialIndex];
-
-  /// 這一步要喊的身分名稱。
-  ///
-  /// 用角色名而不是步驟標題 —— 標題可能是「機械狼（守衛）」，喊出來會露餡。
-  String get _callName => _step.primaryRole?.nameZh ?? _step.title;
-
-
-  int get _requiredPickCount => switch (_sub) {
-        _Sub.registerSeats => _step.seatCount,
-        _Sub.pickSpecial => 1,
-        _Sub.hunterGesture ||
-        _Sub.mechanicReveal ||
-        _Sub.mechanicKnifeGesture ||
-        _Sub.passThrough =>
-          0,
-        _ => 1,
-      };
-
-  /// 機械狼今晚是否多一刀 —— 要已經帶刀（小狼全滅）且學到狼人。
-  bool get _hasExtraKnife => _state.mechanicHasExtraKnifeOn(_actions.night);
-
-  /// 目前這一步實際要收的技能。
-  ///
-  /// 機械狼那一輪的 [NightStep.skill] 固定是 [NightSkill.mechanicTurn]，
-  /// 真正要收的技能記在 [NightStep.mechanicSubSkill]。
-  NightSkill get _effectiveSkill => _step.skill == NightSkill.mechanicTurn
-      ? _step.mechanicSubSkill
-      : _step.skill;
-
-  /// 開刀手勢給完後，接著進入技能那一段。
-  void _goToMechanicSkill() {
-    switch (_step.mechanicSubSkill) {
-      case NightSkill.none:
-        _advanceStep();
-      case NightSkill.witchPotion:
-        // 機械狼學到女巫只有毒藥，沒有解藥。
-        _sub = _Sub.witchPoison;
-      default:
-        _sub = _Sub.chooseTarget;
-    }
-  }
-
-  bool get _canProceed {
-    switch (_sub) {
-      case _Sub.registerSeats:
-      case _Sub.pickSpecial:
-        return _picked.length == _requiredPickCount;
-      case _Sub.chooseTarget:
-      case _Sub.mechanicKnife:
-      case _Sub.secondKnife:
-      case _Sub.witchHeal:
-      case _Sub.witchPoison:
-        // 技能目標可以放棄（空刀、不用藥），因此不強制選取。
-        return true;
-      case _Sub.hunterGesture:
-      case _Sub.mechanicReveal:
-      case _Sub.mechanicKnifeGesture:
-      case _Sub.passThrough:
-        // 只是告知、確認手勢或走過場，沒有要選的東西。
-        return true;
-    }
-  }
-
-  void _toggleSeat(int seat) {
-    setState(() {
-      if (_picked.contains(seat)) {
-        _picked.remove(seat);
-        return;
-      }
-      if (_requiredPickCount == 1) {
-        _picked
-          ..clear()
-          ..add(seat);
-      } else if (_picked.length < _requiredPickCount) {
-        _picked.add(seat);
-      }
-    });
-  }
-
-  void _next() {
-    setState(() {
-      switch (_sub) {
-        case _Sub.registerSeats:
-          _commitSeatRegistration();
-          _picked.clear();
-          if (_step.needsSpecialPick) {
-            _specialIndex = 0;
-            _sub = _Sub.pickSpecial;
-          } else {
-            _afterRegistration();
-          }
-
-        case _Sub.pickSpecial:
-          _state.playerAt(_picked.first).role = _specialRole;
-          _picked.clear();
-          if (_specialIndex + 1 < _step.specialPicks.length) {
-            _specialIndex++;
-          } else {
-            _afterRegistration();
-          }
-
-        case _Sub.chooseTarget:
-          _commitTarget();
-          _picked.clear();
-          _advanceStep();
-
-        case _Sub.mechanicKnifeGesture:
-          // 手勢給完：有刀就問刀口，沒刀就直接進技能那一段。
-          if (_state.mechanicWolfCarriesKnife) {
-            _sub = _Sub.mechanicKnife;
-          } else {
-            _goToMechanicSkill();
-          }
-
-        case _Sub.mechanicKnife:
-          // 第一刀。第二刀（學到狼人時）留到狼隊那一格再收。
-          _actions.wolfTarget = _picked.isEmpty ? null : _picked.first;
-          _picked.clear();
-          _goToMechanicSkill();
-
-        case _Sub.secondKnife:
-          _actions.wolfSecondTarget = _picked.isEmpty ? null : _picked.first;
-          _picked.clear();
-          _advanceStep();
-
-        case _Sub.mechanicReveal:
-          // 只是告知結果，沒有要記錄的行動。
-          _advanceStep();
-
-        case _Sub.passThrough:
-          // 走過場，沒有要記錄的行動。
-          _advanceStep();
-
-        case _Sub.witchHeal:
-          // 只有女巫本人有解藥（機械狼學到女巫不會走到這個子階段）。
-          _actions.witchHealTarget = _picked.isEmpty ? null : _picked.first;
-          _picked.clear();
-          _sub = _Sub.witchPoison;
-
-        case _Sub.witchPoison:
-          final poison = _picked.isEmpty ? null : _picked.first;
-          if (_step.byMechanicWolf) {
-            _actions.mechanicPoisonTarget = poison;
-          } else {
-            _actions.witchPoisonTarget = poison;
-          }
-          _picked.clear();
-          _advanceStep();
-
-        case _Sub.hunterGesture:
-          // 只是確認手勢，沒有要記錄的行動。
-          _advanceStep();
-      }
-    });
-  }
-
-  /// 登記（與特殊成員指認）完成後，接著進入本步驟的技能子階段。
-  void _afterRegistration() {
-    switch (_step.skill) {
-      case NightSkill.none:
-        _advanceStep();
-      case NightSkill.witchPotion:
-        _sub = _step.byMechanicWolf ? _Sub.witchPoison : _Sub.witchHeal;
-      case NightSkill.hunterGesture:
-        _sub = _Sub.hunterGesture;
-      case NightSkill.mechanicReveal:
-        _sub = _Sub.mechanicReveal;
-      case NightSkill.mechanicTurn:
-        _sub = _Sub.mechanicKnifeGesture;
-      default:
-        _sub = _Sub.chooseTarget;
-    }
-  }
-
-  /// 把登記的座次寫成身分。狼隊先全部記為一般狼，稍後再挑出狼王／狼美人。
-  void _commitSeatRegistration() {
-    final role = _step.roles.first;
-    for (final seat in _picked) {
-      _state.playerAt(seat).role = role;
-    }
-  }
-
-  void _commitTarget() {
-    final target = _picked.isEmpty ? null : _picked.first;
-    // 機械狼用學來的技能時，目標記在牠自己的欄位 —— 與原角色各自獨立，
-    // 否則兩人守同一晚會互相覆蓋。
-    final byMechanic = _step.byMechanicWolf;
-    switch (_effectiveSkill) {
-      case NightSkill.guardProtect:
-        if (byMechanic) {
-          _actions.mechanicGuardTarget = target;
-        } else {
-          _actions.guardTarget = target;
-        }
-      case NightSkill.wolfKill:
-        _actions.wolfTarget = target;
-      case NightSkill.seerInspect:
-      case NightSkill.psychicInspect:
-        if (byMechanic) {
-          _actions.mechanicInspectTarget = target;
-        } else if (_effectiveSkill == NightSkill.psychicInspect) {
-          _actions.psychicTarget = target;
-        } else {
-          _actions.seerTarget = target;
-        }
-      case NightSkill.charm:
-        if (byMechanic) {
-          _actions.mechanicCharmTarget = target;
-        } else {
-          _actions.wolfBeautyCharmTarget = target;
-        }
-      case NightSkill.mechanicLearn:
-        _actions.mechanicWolfLearnTarget = target;
-      case NightSkill.witchPotion:
-      case NightSkill.hunterGesture:
-      case NightSkill.mechanicReveal:
-      case NightSkill.mechanicTurn:
-      case NightSkill.none:
-        break;
-    }
-  }
-
-  void _advanceStep() {
-    final next = _stepIndex + 1;
-    if (next >= _steps.length) {
-      _finish();
-      return;
-    }
-    _stepIndex = next;
-    _specialIndex = 0;
-    _sub = _initialSubFor(_step);
-  }
-
-  void _finish() {
-    // 走完所有特殊身分，剩下的座次就是平民。
-    final villagers =
-        _isFirstNight ? _state.assignRemainingAsVillager() : <int>[];
-
-    final outcome = _arbitrator.settle(_state, _actions);
-    _arbitrator.apply(_state, _actions, outcome);
-
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => NightResultPage(
-          state: _state,
-          outcome: outcome,
-          autoFilledVillagers: villagers,
-        ),
-      ),
+    _m = NightFlowMachine(
+      state: widget.state,
+      night: widget.state.dayNumber,
+      isFirstNight: widget.state.dayNumber == 1,
     );
   }
 
-  // ---- 以下為各子階段的呈現內容 ----
+  // 以下短別名純粹是為了讓下面的文案讀起來不那麼囉唆。
+  GameState get _state => _m.state;
+  NightStep get _step => _m.step;
+  NightSub get _sub => _m.sub;
+  NightActions get _actions => _m.actions;
+  Role get _specialRole => _m.specialRole;
+  String get _callName => _m.callName;
+  NightSkill get _effectiveSkill => _m.effectiveSkill;
+  bool get _hasExtraKnife => _m.hasExtraKnife;
 
-  /// 獵人今晚能不能開槍 —— 決定法官要給哪個手勢。
-  bool get _hunterCanShoot =>
-      _arbitrator.hunterCanShootTonight(_state, _actions);
+  void _toggleSeat(int seat) => setState(() => _m.toggleSeat(seat));
+
+  void _undo() => setState(_m.undo);
+
+  void _next() {
+    setState(_m.next);
+    if (!_m.finished) return;
+
+    final showResult = MaterialPageRoute<void>(
+      builder: (_) => NightResultPage(
+        state: _state,
+        outcome: _m.outcome!,
+        autoFilledVillagers: _m.autoFilledVillagers,
+      ),
+    );
+
+    // 第一天的警長競選排在**公布死訊之前** —— 昨晚死的人這時還沒被公布，
+    // 照樣可以上警、可以投票。
+    final needsElection =
+        _state.dayNumber == 1 && _state.preset.rules.sheriffElection;
+
+    Navigator.of(context).pushReplacement(
+      needsElection
+          ? MaterialPageRoute<void>(
+              builder: (context) => SheriffElectionPage(
+                state: _state,
+                onFinished: () =>
+                    Navigator.of(context).pushReplacement(showResult),
+              ),
+            )
+          : showResult,
+    );
+  }
 
   /// 手勢卡的對象 —— 獵人本人，或學到槍牌的機械狼。
   ///
@@ -412,30 +113,25 @@ class _NightFlowPageState extends State<NightFlowPage> {
       : _state.seatOfRole(Roles.hunter.id);
 
   bool get _gestureCanShoot => _gestureForMechanic
-      ? _arbitrator.mechanicCanShootTonight(_state, _actions)
-      : _hunterCanShoot;
-
-  /// 機械狼目前的身分（含本夜剛學到、還沒套用的）。
-  Role? get _mechanicLearnedRoleNow =>
-      _arbitrator.mechanicLearnedRoleNow(_state, _actions);
+      ? _m.mechanicCanShootTonight
+      : _m.hunterCanShootTonight;
 
   String get _gestureOwnerLabel => _gestureForMechanic
       ? '機械狼（已學到${_state.mechanicWolfLearnedRole?.nameZh ?? "槍牌"}）'
       : '獵人';
 
   String get _title => switch (_sub) {
-        _Sub.registerSeats => '${_step.title}請睜眼',
-        _Sub.pickSpecial => '哪一位是${_specialRole.nameZh}？',
-        _Sub.witchHeal => '${_step.title}：要用解藥嗎？',
-        _Sub.witchPoison => '${_step.title}：要用毒藥嗎？',
-        _Sub.hunterGesture => '${_step.title}請睜眼',
-        _Sub.mechanicReveal => '機械狼請睜眼',
-        _Sub.mechanicKnifeGesture => '機械狼請睜眼',
-        _Sub.passThrough => '$_callName請睜眼',
-        _Sub.mechanicKnife =>
+        NightSub.registerSeats => '${_step.title}請睜眼',
+        NightSub.pickSpecial => '哪一位是${_specialRole.nameZh}？',
+        NightSub.witchPotion => '${_step.title}請睜眼',
+        NightSub.hunterGesture => '${_step.title}請睜眼',
+        NightSub.mechanicReveal => '機械狼請睜眼',
+        NightSub.mechanicKnifeGesture => '機械狼請睜眼',
+        NightSub.passThrough => '$_callName請睜眼',
+        NightSub.mechanicKnife =>
           _hasExtraKnife ? '機械狼第一刀要砍誰？' : '機械狼要刀誰？',
-        _Sub.secondKnife => '機械狼第二刀要砍誰？',
-        _Sub.chooseTarget => switch (_effectiveSkill) {
+        NightSub.secondKnife => '機械狼第二刀要砍誰？',
+        NightSub.chooseTarget => switch (_effectiveSkill) {
             NightSkill.guardProtect => '${_step.title}要守誰？',
             NightSkill.wolfKill => '${_step.title}要刀誰？',
             NightSkill.seerInspect => '${_step.title}要查驗誰？',
@@ -449,30 +145,27 @@ class _NightFlowPageState extends State<NightFlowPage> {
   String get _hint => switch (_sub) {
         // 獵人、白痴這類角色沒有夜間行動，只是叫起來確認號碼 ——
         // 要講明按下一步就結束，否則法官會等在這裡以為還有技能要選。
-        _Sub.registerSeats => _step.skill == NightSkill.none
+        NightSub.registerSeats => _step.skill == NightSkill.none
             ? '確認號碼即可，${_step.title}沒有夜間行動'
             : _step.skill == NightSkill.hunterGesture
                 ? '請填入座次號碼，接著給開槍手勢'
                 : _step.seatCount > 1
                     ? '請填入 ${_step.seatCount} 位的座次號碼'
                     : '請填入座次號碼',
-        _Sub.hunterGesture => '請對獵人做出下面的手勢',
-        _Sub.pickSpecial => _specialRole.id == Roles.wolfKing.id
+        NightSub.hunterGesture => '請對獵人做出下面的手勢',
+        NightSub.pickSpecial => _specialRole.id == Roles.wolfKing.id
             ? '狼王出局時可以開槍帶人，需要單獨記錄'
             : '狼美人出局時被魅惑者會殉情，需要單獨記錄',
-        _Sub.witchHeal => _witchHealHint,
-        _Sub.witchPoison => _poisonAvailable
-            ? '不使用請直接按下一步'
-            : '毒藥已在之前的夜晚用掉了',
-        _Sub.mechanicReveal => '法官依下面的內容比給機械狼看',
-        _Sub.mechanicKnifeGesture => '機械狼不知道小狼死光了沒，'
+        NightSub.witchPotion => '點號碼選毒藥目標；解藥用下方按鈕。都不用就直接按下一步',
+        NightSub.mechanicReveal => '法官依下面的內容比給機械狼看',
+        NightSub.mechanicKnifeGesture => '機械狼不知道小狼死光了沒，'
             '每晚都要由法官比手勢告知今晚有沒有刀',
-        _Sub.passThrough => '照常喊完再讓他們閉眼，不要跳過',
-        _Sub.mechanicKnife => '空刀請直接按下一步',
-        _Sub.secondKnife => '機械狼已學到狼人，這晚多一刀。'
+        NightSub.passThrough => '照常喊完再讓他們閉眼，不要跳過',
+        NightSub.mechanicKnife => '空刀請直接按下一步',
+        NightSub.secondKnife => '機械狼已學到狼人，這晚多一刀。'
             '${_actions.wolfTarget == null ? "第一刀空刀。" : "第一刀砍了 ${_actions.wolfTarget} 號，"}'
             '砍同一人可破盾（守衛與解藥都擋不住），不砍請直接按下一步',
-        _Sub.chooseTarget => switch (_effectiveSkill) {
+        NightSub.chooseTarget => switch (_effectiveSkill) {
             NightSkill.wolfKill => '空刀請直接按下一步',
             NightSkill.guardProtect => _guardHint,
             NightSkill.charm => _charmHint,
@@ -515,141 +208,53 @@ class _NightFlowPageState extends State<NightFlowPage> {
       ? _state.mechanicPoisonAvailable
       : _state.witchPoisonAvailable;
 
-  /// 同夜雙藥的限制只對女巫本人成立（機械狼沒有解藥，不可能雙藥）。
-  int? get _healTargetOfActor =>
-      _step.byMechanicWolf ? null : _actions.witchHealTarget;
-
   /// 解藥持有者的座次 —— 只有女巫，用來判斷是不是自救。
   int? get _potionOwnerSeat => _state.seatOfRole(Roles.witch.id);
 
-  String get _witchHealHint {
+  /// 解藥那一排為什麼是暗的。可用時回傳 null。
+  String? get _antidoteBlockedReason {
+    if (_step.byMechanicWolf) return '機械狼學到女巫只拿得到毒藥，沒有解藥';
     if (!_antidoteAvailable) return '解藥已在之前的夜晚用掉了';
-    final knives = _actions.wolfTargets.toSet().toList()..sort();
-    if (knives.isEmpty) return '今晚沒有人被刀';
-
-    final selfSeat = _potionOwnerSeat;
-    final maySelfHeal = _state.preset.rules.witchMaySelfHeal(_actions.night);
-    if (knives.length == 1 && knives.first == selfSeat && !maySelfHeal) {
-      return '今晚 ${knives.first} 號被刀，但那是女巫自己，本局規則不可自救';
-    }
-
-    final list = knives.join('、');
-    if (knives.length > 1) {
-      return '今晚 $list 號被刀（雙刀）。解藥只有一瓶，最多救一位';
-    }
-    return '今晚 $list 號被刀。要救請點選，不救請直接按下一步';
-  }
-
-  /// 登記階段只能挑未指定身分的座次；技能階段可挑存活座次。
-  Set<int>? get _selectableSeats {
-    switch (_sub) {
-      case _Sub.hunterGesture:
-        return const {};
-      case _Sub.registerSeats:
-        return _unassignedSeats;
-      case _Sub.pickSpecial:
-        // 只能從剛登記的狼隊成員裡挑（尚未被指認為其他特殊身分的）。
-        return _state.seatsOfRole(Roles.wolf.id).toSet();
-      case _Sub.mechanicKnifeGesture:
-      case _Sub.mechanicReveal:
-      case _Sub.passThrough:
-        return const {};
-      case _Sub.mechanicKnife:
-      case _Sub.secondKnife:
-        // 第二刀可以砍同一人（破盾），所以不排除第一刀的目標。
-        return _state.alivePlayers.map((p) => p.seat).toSet();
-      case _Sub.witchHeal:
-        if (!_antidoteAvailable) return const {};
-        // 解藥只能救今晚的刀口（雙刀時兩個刀口都可救，但只救得了一個）。
-        final knives = _actions.wolfTargets.toSet();
-        if (knives.isEmpty) return const {};
-        final selfSeat = _potionOwnerSeat;
-        if (selfSeat != null &&
-            !_state.preset.rules.witchMaySelfHeal(_actions.night)) {
-          knives.remove(selfSeat);
-        }
-        return knives;
-      case _Sub.witchPoison:
-        if (!_poisonAvailable) return const {};
-        if (!_state.preset.rules.witchDualUseSameNight &&
-            _healTargetOfActor != null) {
-          return const {};
-        }
-        return null;
-      case _Sub.chooseTarget:
-        if (_effectiveSkill == NightSkill.guardProtect) {
-          final all = _state.alivePlayers.map((p) => p.seat).toSet();
-          final last = _lastGuardOfActor;
-          if (last != null && _state.preset.rules.guardCannotRepeatTarget) {
-            all.remove(last);
-          }
-          return all;
-        }
-        if (_effectiveSkill == NightSkill.charm) {
-          final all = _state.alivePlayers.map((p) => p.seat).toSet();
-          final last = _lastCharmOfActor;
-          if (last != null && _state.preset.rules.charmCannotRepeatTarget) {
-            all.remove(last);
-          }
-          return all;
-        }
-        if (_effectiveSkill == NightSkill.mechanicLearn) {
-          // 學習對象是別人 —— 學自己沒有意義。
-          final all = _state.alivePlayers.map((p) => p.seat).toSet();
-          final self = _state.seatOfRole(Roles.mechanicWolf.id);
-          if (self != null) all.remove(self);
-          return all;
-        }
-        if (_effectiveSkill == NightSkill.wolfKill &&
-            _state.preset.rules.wolfBeautyCannotSelfKill) {
-          // 狼美人不能自刀。
-          final all = _state.alivePlayers.map((p) => p.seat).toSet();
-          final beauty = _state.seatOfRole(Roles.wolfBeauty.id);
-          if (beauty != null) all.remove(beauty);
-          return all;
-        }
-        return null;
-    }
-  }
-
-  Map<int, String>? get _disabledReasons {
-    if (_sub == _Sub.chooseTarget &&
-        _effectiveSkill == NightSkill.guardProtect &&
-        _lastGuardOfActor != null &&
-        _state.preset.rules.guardCannotRepeatTarget) {
-      return {_lastGuardOfActor!: '昨晚已守'};
-    }
-    if (_sub == _Sub.chooseTarget &&
-        _effectiveSkill == NightSkill.charm &&
-        _lastCharmOfActor != null &&
-        _state.preset.rules.charmCannotRepeatTarget) {
-      return {_lastCharmOfActor!: '昨晚已魅惑'};
-    }
-    if (_sub == _Sub.chooseTarget &&
-        _effectiveSkill == NightSkill.wolfKill &&
-        _state.preset.rules.wolfBeautyCannotSelfKill) {
-      final beauty = _state.seatOfRole(Roles.wolfBeauty.id);
-      if (beauty != null) return {beauty: '狼美人不能自刀'};
-    }
-    if (_sub == _Sub.chooseTarget &&
-        _effectiveSkill == NightSkill.mechanicLearn) {
-      final self = _state.seatOfRole(Roles.mechanicWolf.id);
-      if (self != null) return {self: '不能學自己'};
-    }
-    if (_sub == _Sub.witchPoison &&
-        !_state.preset.rules.witchDualUseSameNight &&
-        _healTargetOfActor != null) {
-      return {
-        for (final p in _state.players) p.seat: '本局不可同夜雙藥',
-      };
+    if (_m.knifedSeats.isEmpty) return '今晚沒有人被刀';
+    if (_m.healableSeats.isEmpty) {
+      if (_m.picked.isNotEmpty) return '已選毒藥目標，本局不可同夜雙藥';
+      final self = _potionOwnerSeat;
+      if (self != null && _m.knifedSeats.contains(self)) {
+        return '刀口是女巫自己，本局規則不可自救';
+      }
+      return '解藥用不了';
     }
     return null;
+  }
+
+  /// 毒藥那一排的說明。
+  String get _poisonLabel {
+    if (!_poisonAvailable) return '毒藥已在之前的夜晚用掉了';
+    if (!_m.poisonUsable) return '已下解藥，本局不可同夜雙藥';
+    if (_m.picked.isEmpty) return '點上方號碼選毒藥目標';
+    return '毒 ${_m.picked.first} 號';
+  }
+
+  /// 禁選原因的顯示文字。原因本身由狀態機判定，這裡只負責措辭。
+  Map<int, String>? get _disabledReasons {
+    final blocked = _m.blockedSeats;
+    if (blocked == null) return null;
+    return {
+      for (final e in blocked.entries)
+        e.key: switch (e.value) {
+          SeatBlockReason.guardedLastNight => '昨晚已守',
+          SeatBlockReason.charmedLastNight => '昨晚已魅惑',
+          SeatBlockReason.wolfBeautySelfKill => '狼美人不能自刀',
+          SeatBlockReason.mechanicSelfLearn => '不能學自己',
+          SeatBlockReason.witchDualUse => '本局不可同夜雙藥',
+        },
+    };
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final stepLabel = '${_stepIndex + 1}/${_steps.length}';
+    final stepLabel = '${_m.stepIndex + 1}/${_m.steps.length}';
 
     return Scaffold(
       appBar: AppBar(
@@ -660,7 +265,7 @@ class _NightFlowPageState extends State<NightFlowPage> {
             padding: const EdgeInsets.only(left: 16, bottom: 10, right: 16),
             child: Row(
               children: [
-                for (var i = 0; i < _steps.length; i++) ...[
+                for (var i = 0; i < _m.steps.length; i++) ...[
                   if (i > 0)
                     Text(
                       ' → ',
@@ -670,14 +275,14 @@ class _NightFlowPageState extends State<NightFlowPage> {
                       ),
                     ),
                   Text(
-                    _steps[i].title,
+                    _m.steps[i].title,
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight:
-                          i == _stepIndex ? FontWeight.w800 : FontWeight.w400,
-                      color: i == _stepIndex
+                          i == _m.stepIndex ? FontWeight.w800 : FontWeight.w400,
+                      color: i == _m.stepIndex
                           ? scheme.primary
-                          : i < _stepIndex
+                          : i < _m.stepIndex
                               ? scheme.onSurfaceVariant
                               : scheme.onSurfaceVariant
                                   .withValues(alpha: 0.4),
@@ -719,24 +324,24 @@ class _NightFlowPageState extends State<NightFlowPage> {
           ),
           Expanded(
             child: SingleChildScrollView(
-              child: _sub == _Sub.passThrough
+              child: _sub == NightSub.passThrough
                   ? _PassThroughCard(name: _callName)
-                  : _sub == _Sub.mechanicKnifeGesture
+                  : _sub == NightSub.mechanicKnifeGesture
                   ? _MechanicKnifeGestureCard(
                       seat: _state.seatOfRole(Roles.mechanicWolf.id),
-                      hasKnife: _state.mechanicWolfCarriesKnife,
+                      hasKnife: _m.state.mechanicWolfCarriesKnife,
                       extraKnife: _hasExtraKnife,
                     )
-                  : _sub == _Sub.mechanicReveal
+                  : _sub == NightSub.mechanicReveal
                   ? _MechanicRevealCard(
                       seat: _state.seatOfRole(Roles.mechanicWolf.id),
-                      learnedRole: _mechanicLearnedRoleNow,
+                      learnedRole: _m.mechanicLearnedRoleNow,
                       learnedTonight: _state.mechanicWolfLearnedRole == null &&
                           _actions.mechanicWolfLearnTarget != null,
                       canShoot:
-                          _arbitrator.mechanicCanShootTonight(_state, _actions),
+                          _m.mechanicCanShootTonight,
                     )
-                  : _sub == _Sub.hunterGesture
+                  : _sub == NightSub.hunterGesture
                   ? _HunterGestureCard(
                       ownerLabel: _gestureOwnerLabel,
                       seat: _gestureSeat,
@@ -745,13 +350,34 @@ class _NightFlowPageState extends State<NightFlowPage> {
                           (_actions.witchPoisonTarget == _gestureSeat ||
                               _actions.mechanicPoisonTarget == _gestureSeat),
                     )
+                  : _sub == NightSub.witchPotion
+                  ? _WitchPanel(
+                      knifedSeats: _m.knifedSeats,
+                      healableSeats: _m.healableSeats,
+                      healTarget: _m.healTarget,
+                      onToggleHeal: (seat) =>
+                          setState(() => _m.toggleHeal(seat)),
+                      antidoteBlockedReason: _antidoteBlockedReason,
+                      poisonLabel: _poisonLabel,
+                      poisonTarget:
+                          _m.picked.isEmpty ? null : _m.picked.first,
+                      poisonUsable: _m.poisonUsable,
+                      seatPicker: SeatPicker(
+                        state: _state,
+                        selected: _m.picked,
+                        onTap: _toggleSeat,
+                        selectableSeats: _m.selectableSeats,
+                        disabledReason: _disabledReasons,
+                        showRoleName: true,
+                      ),
+                    )
                   : SeatPicker(
                       state: _state,
-                      selected: _picked,
+                      selected: _m.picked,
                       onTap: _toggleSeat,
-                      selectableSeats: _selectableSeats,
+                      selectableSeats: _m.selectableSeats,
                       disabledReason: _disabledReasons,
-                      showRoleName: _sub != _Sub.registerSeats,
+                      showRoleName: _sub != NightSub.registerSeats,
                     ),
             ),
           ),
@@ -760,21 +386,32 @@ class _NightFlowPageState extends State<NightFlowPage> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               child: Column(
                 children: [
-                  if (_requiredPickCount > 1)
+                  if (_m.requiredPickCount > 1)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        '已選 ${_picked.length}/$_requiredPickCount：'
-                        '${(_picked.toList()..sort()).join('、')}',
+                        '已選 ${_m.picked.length}/${_m.requiredPickCount}：'
+                        '${(_m.picked.toList()..sort()).join('、')}',
                         style: TextStyle(
                           fontSize: 13,
                           color: scheme.onSurfaceVariant,
                         ),
                       ),
                     ),
+                  // 法官現場誤觸是常態，撤銷要隨手按得到；
+                  // 但排在「下一步」上方、樣式較低調，避免反射性點錯。
+                  if (_m.canUndo)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: OutlinedButton.icon(
+                        onPressed: _undo,
+                        icon: const Icon(Icons.undo_rounded, size: 18),
+                        label: Text('撤銷上一步（${_m.undoLabel}）'),
+                      ),
+                    ),
                   FilledButton(
-                    onPressed: _canProceed ? _next : null,
-                    child: Text(_canProceed ? '下一步' : _blockedLabel),
+                    onPressed: _m.canProceed ? _next : null,
+                    child: Text(_m.canProceed ? '下一步' : _blockedLabel),
                   ),
                 ],
               ),
@@ -786,11 +423,230 @@ class _NightFlowPageState extends State<NightFlowPage> {
   }
 
   String get _blockedLabel => switch (_sub) {
-        _Sub.registerSeats =>
-          '請選滿 ${_step.seatCount} 位（已選 ${_picked.length}）',
-        _Sub.pickSpecial => '請指定${_specialRole.nameZh}',
+        NightSub.registerSeats =>
+          '請選滿 ${_step.seatCount} 位（已選 ${_m.picked.length}）',
+        NightSub.pickSpecial => '請指定${_specialRole.nameZh}',
         _ => '下一步',
       };
+}
+
+/// 女巫那一頁：刀口寫在中間，解藥與毒藥並列在下方。
+///
+/// 兩瓶藥收在同一畫面，法官一眼看完再決定 —— 原本拆成兩步要按兩次
+/// 「下一步」，現場摸黑往前走很容易搞不清楚自己在哪一格。
+class _WitchPanel extends StatelessWidget {
+  const _WitchPanel({
+    required this.knifedSeats,
+    required this.healableSeats,
+    required this.healTarget,
+    required this.onToggleHeal,
+    required this.antidoteBlockedReason,
+    required this.poisonLabel,
+    required this.poisonTarget,
+    required this.poisonUsable,
+    required this.seatPicker,
+  });
+
+  final List<int> knifedSeats;
+  final List<int> healableSeats;
+  final int? healTarget;
+  final ValueChanged<int> onToggleHeal;
+
+  /// 解藥不能用的原因；null 表示可用。
+  final String? antidoteBlockedReason;
+
+  final String poisonLabel;
+  final int? poisonTarget;
+  final bool poisonUsable;
+
+  final Widget seatPicker;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final antidoteOn = healTarget != null;
+    final poisonOn = poisonTarget != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ---- 中間：今晚誰被刀 ----
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          child: Card(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: WgmTheme.wolfColor.withValues(alpha: 0.10),
+                border: Border.all(
+                  color: WgmTheme.wolfColor.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    '今晚的刀口',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    knifedSeats.isEmpty
+                        ? '沒有人被刀'
+                        : '${knifedSeats.join('、')} 號',
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      color: knifedSeats.isEmpty
+                          ? scheme.onSurfaceVariant
+                          : WgmTheme.wolfColor,
+                    ),
+                  ),
+                  if (knifedSeats.length > 1) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '雙刀 —— 解藥只有一瓶，最多救一位',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+
+        seatPicker,
+
+        // ---- 下方：解藥與毒藥 ----
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _PotionRow(
+                label: '解藥',
+                active: antidoteOn,
+                activeColor: WgmTheme.godColor,
+                // 能用的時候才變亮。
+                blockedReason: antidoteBlockedReason,
+                child: antidoteBlockedReason != null
+                    ? null
+                    : Wrap(
+                        spacing: 8,
+                        children: [
+                          for (final seat in healableSeats)
+                            ChoiceChip(
+                              label: Text('救 $seat 號'),
+                              selected: healTarget == seat,
+                              onSelected: (_) => onToggleHeal(seat),
+                            ),
+                        ],
+                      ),
+              ),
+              const SizedBox(height: 10),
+              _PotionRow(
+                label: '毒藥',
+                // 點了號碼才變亮。
+                active: poisonOn,
+                activeColor: WgmTheme.wolfColor,
+                blockedReason: poisonUsable ? null : poisonLabel,
+                child: poisonUsable
+                    ? Text(
+                        poisonLabel,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight:
+                              poisonOn ? FontWeight.w800 : FontWeight.w400,
+                          color: poisonOn
+                              ? WgmTheme.wolfColor
+                              : scheme.onSurfaceVariant,
+                        ),
+                      )
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 解藥／毒藥各自一排。亮起來表示這一瓶今晚會用掉。
+class _PotionRow extends StatelessWidget {
+  const _PotionRow({
+    required this.label,
+    required this.active,
+    required this.activeColor,
+    required this.blockedReason,
+    required this.child,
+  });
+
+  final String label;
+  final bool active;
+  final Color activeColor;
+
+  /// 不能用的原因；null 表示可用。
+  final String? blockedReason;
+
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final blocked = blockedReason != null;
+    final color = blocked
+        ? scheme.onSurfaceVariant
+        : (active ? activeColor : scheme.onSurface);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: active ? activeColor.withValues(alpha: 0.14) : null,
+        border: Border.all(
+          color: active
+              ? activeColor
+              : scheme.outlineVariant.withValues(alpha: blocked ? 0.4 : 0.8),
+          width: active ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 54,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
+            ),
+          ),
+          Expanded(
+            child: blocked
+                ? Text(
+                    blockedReason!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  )
+                : (child ?? const SizedBox.shrink()),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 走過場卡：角色已全滅，但這一步照喊不誤。

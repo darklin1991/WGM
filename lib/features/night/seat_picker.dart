@@ -92,21 +92,23 @@ class SeatPicker extends StatelessWidget {
                         : color.withValues(alpha: 0.5),
                   ),
                 ),
-                if (showRoleName && player.role != null)
-                  Text(
-                    player.role!.nameZh,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: WgmTheme.colorOf(player.role),
-                    ),
-                  )
-                else if (reason != null)
+                // 禁選原因優先於身分名稱 —— 法官看到格子變灰時，
+                // 最需要知道的是「為什麼不能選」，身分可以事後再查。
+                if (reason != null)
                   Text(
                     reason,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 9,
                       color: WgmTheme.deadColor,
+                    ),
+                  )
+                else if (showRoleName && player.role != null)
+                  Text(
+                    player.role!.nameZh,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: WgmTheme.colorOf(player.role),
                     ),
                   )
                 else if (!player.alive)

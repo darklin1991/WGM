@@ -27,8 +27,14 @@ class Role {
   /// null 表示沒有主動夜間行動（例如獵人、白痴、平民）。
   final int? nightPriority;
 
-  /// 是否有主動夜間行動。
+  /// 是否有主動夜間行動 —— 有的話**必須**出現在板子的 `nightOrder` 裡。
   bool get actsAtNight => nightPriority != null;
+
+  /// 一個板子裡是否允許多於一人。
+  ///
+  /// 只有一般狼與平民可以多人；其餘身分每個板子只會有一位，
+  /// 引擎也依此假設（`GameState.seatOfRole` 只回傳第一個）。
+  bool get allowsMultiple => id == 'wolf' || id == 'villager';
 
   @override
   String toString() => 'Role($id)';

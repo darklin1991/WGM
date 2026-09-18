@@ -96,6 +96,16 @@ class NightResultPage extends StatelessWidget {
               body: '獵人已出局且死因不是毒，請詢問是否開槍帶人。',
             ),
 
+          // ---- 狼王開槍 ----
+          // 狼王不給夜間手勢 —— 狼隊自己知道有沒有自刀，白天起來直接發動。
+          if (outcome.wolfKingMayShoot)
+            _InfoCard(
+              icon: Icons.crisis_alert_rounded,
+              iconColor: WgmTheme.wolfColor,
+              title: '狼王可以開槍',
+              body: '狼王被自刀出局，白天可直接發動技能帶走一名玩家。',
+            ),
+
           // ---- 預言家查驗結果 ----
           if (outcome.seerTarget != null)
             _InfoCard(
@@ -272,7 +282,7 @@ class NightResultPage extends StatelessWidget {
 
   void _nextNight(BuildContext context) {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => NightFlowPage(state: state)),
+      NightFlowPage.route(state),
     );
   }
 }

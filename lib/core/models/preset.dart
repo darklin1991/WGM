@@ -98,7 +98,29 @@ class Preset {
           message: '必須是正整數，實際為 $count',
         );
       }
+      // 每個板子裡，一般狼與平民以外的身分只會有一位 —— 引擎依此假設
+      // （`seatOfRole` 只回傳第一個），多填會讓第二位的技能直接消失。
+      if (count != 1 && !role.allowsMultiple) {
+        throw PresetFormatException(
+          presetId: presetId,
+          field: 'roles[$i].count',
+          message: '${role.nameZh} 每個板子只能有 1 位，實際為 $count',
+        );
+      }
       slots.add(RoleSlot(role: role, count: count));
+    }
+
+    // 同一角色不可重複列出（否則單人限制會被繞過）。
+    final seenIds = <String>{};
+    for (var i = 0; i < slots.length; i++) {
+      final id = slots[i].role.id;
+      if (!seenIds.add(id)) {
+        throw PresetFormatException(
+          presetId: presetId,
+          field: 'roles[$i].role',
+          message: '角色 "$id" 重複列出，請合併成一筆',
+        );
+      }
     }
 
     // 驗證：角色數量總和必須等於人數。
@@ -140,6 +162,28 @@ class Preset {
         );
       }
       order.add(role);
+    }
+
+    // 驗證：有夜間行動的角色都必須排進 nightOrder。
+    //
+    // 漏掉的話流程產生器會把它默默接在最後，法官照著跑就會出錯 ——
+    // 例如漏了女巫，獵人的開槍手勢會在毒還沒收之前就給出去。
+    // 狼隊成員（狼王、狼美人）與一般狼合併成一步，只要狼隊有任一成員在
+    // nightOrder 裡就算涵蓋。
+    final orderIds = order.map((r) => r.id).toSet();
+    final wolfTeamListed = orderIds.any(Roles.wolfTeamIds.contains);
+    for (final slot in slots) {
+      final role = slot.role;
+      if (!role.actsAtNight) continue;
+      final covered = orderIds.contains(role.id) ||
+          (Roles.wolfTeamIds.contains(role.id) && wolfTeamListed);
+      if (!covered) {
+        throw PresetFormatException(
+          presetId: presetId,
+          field: 'nightOrder',
+          message: '${role.nameZh}（${role.id}）有夜間行動，必須排進 nightOrder',
+        );
+      }
     }
 
     return Preset(

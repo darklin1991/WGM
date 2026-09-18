@@ -581,6 +581,21 @@ void main() {
       expect(s.mechanicWolfCarriesKnife, isTrue);
     });
 
+    // 首夜機械狼第一個睜眼，那時小狼都還沒登記 —— 若只看「場上有沒有
+    // 活著的狼隊成員」會誤判成狼隊全滅，機械狼首夜就拿到刀。
+    test('狼隊還沒登記完時不算帶刀', () {
+      final s = GameState(preset: _preset());
+      s.playerAt(4).role = Roles.mechanicWolf; // 只登記了機械狼自己
+
+      expect(s.mechanicWolfCarriesKnife, isFalse);
+
+      // 登記完 3 匹小狼、且都活著 → 仍然不帶刀。
+      for (final seat in [1, 2, 3]) {
+        s.playerAt(seat).role = Roles.wolf;
+      }
+      expect(s.mechanicWolfCarriesKnife, isFalse);
+    });
+
     test('沒有機械狼的板子不受影響', () {
       final s = GameState(preset: _preset());
       // 全部設成平民 —— 板子裡沒人是機械狼。

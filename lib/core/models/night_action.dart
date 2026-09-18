@@ -128,6 +128,7 @@ class NightOutcome {
     required this.seerTarget,
     required this.seerSawWolf,
     required this.hunterMayShoot,
+    this.wolfKingMayShoot = false,
     this.psychicResult,
     this.mechanicLearnedRole,
     this.mechanicSeerTarget,
@@ -176,6 +177,13 @@ class NightOutcome {
 
   /// 獵人是否可以開槍。只有獵人本夜死亡且規則允許時才為 true。
   final bool hunterMayShoot;
+
+  /// 狼王是否可以開槍。
+  ///
+  /// 狼王的條件與獵人不同：**被自刀出局才能開槍**（就算同時吃毒也能開），
+  /// 沒被自刀而死就一定是被毒，不能開。狼隊自己知道有沒有自刀，
+  /// 所以狼王不需要每晚給手勢，白天起來直接發動。
+  final bool wolfKingMayShoot;
 
   bool get isPeacefulNight => deaths.isEmpty;
 

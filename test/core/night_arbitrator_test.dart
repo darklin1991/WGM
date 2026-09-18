@@ -61,6 +61,9 @@ NightActions _actions({
       ..witchPoisonTarget = poison
       ..seerTarget = seer;
 
+Map<int, DeathCause> _deathMap(NightOutcome o) =>
+    { for (final d in o.deaths) d.seat: d.cause };
+
 void main() {
   const arb = NightArbitrator();
 
@@ -194,6 +197,63 @@ void main() {
       expect(arb.hunterCanShootTonight(s, a), isTrue);
       // 結算：獵人沒死 → 不會真的開槍
       expect(arb.settle(s, a).hunterMayShoot, isFalse);
+    });
+  });
+
+  // 狼王的槍與獵人不同：看的是**有沒有被自刀**，不是死因。
+  // 狼隊自己知道有沒有自刀，所以狼王不需要每晚給手勢，白天起來直接發動。
+  group('狼王開槍', () {
+    test('被自刀出局 → 可以開槍', () {
+      final s = _state();
+      final o = arb.settle(s, _actions(wolf: 4)); // 4 號是狼王
+
+      expect(o.wolfKingMayShoot, isTrue);
+    });
+
+    test('被自刀同時又被毒 → 仍可開槍', () {
+      final s = _state();
+      final o = arb.settle(s, _actions(wolf: 4, poison: 4));
+
+      expect(_deathMap(o)[4], DeathCause.poison, reason: '死因記為毒');
+      expect(o.wolfKingMayShoot, isTrue, reason: '但有被自刀，槍還在');
+    });
+
+    test('沒被自刀、只被毒死 → 不可開槍', () {
+      final s = _state();
+      final o = arb.settle(s, _actions(wolf: 9, poison: 4));
+
+      expect(_deathMap(o)[4], DeathCause.poison);
+      expect(o.wolfKingMayShoot, isFalse);
+    });
+
+    test('被自刀但被守衛守住 → 沒死，不能開槍', () {
+      final s = _state();
+      final o = arb.settle(s, _actions(guard: 4, wolf: 4));
+
+      expect(o.wolfKingMayShoot, isFalse);
+    });
+
+    test('同守同救而死也算被自刀 → 可以開槍', () {
+      final s = _state();
+      final o = arb.settle(s, _actions(guard: 4, wolf: 4, heal: 4));
+
+      expect(_deathMap(o)[4], DeathCause.guardHealConflict);
+      expect(o.wolfKingMayShoot, isTrue);
+    });
+
+    test('狼王沒出局 → 不可開槍', () {
+      final s = _state();
+
+      expect(arb.settle(s, _actions(wolf: 9)).wolfKingMayShoot, isFalse);
+    });
+
+    test('狼王的槍與獵人的槍各自獨立', () {
+      final s = _state();
+      // 自刀狼王、毒獵人：狼王有槍，獵人被毒沒槍。
+      final o = arb.settle(s, _actions(wolf: 4, poison: 7));
+
+      expect(o.wolfKingMayShoot, isTrue);
+      expect(o.hunterMayShoot, isFalse);
     });
   });
 
