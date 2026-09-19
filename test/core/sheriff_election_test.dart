@@ -48,7 +48,8 @@ SheriffElection _toVote(List<int> nominees, {GameState? state}) {
   for (final seat in nominees) {
     e.toggleCandidate(seat);
   }
-  e.next(); // 上警 → 退水
+  e.next(); // 上警 → 警上發言
+  e.next(); // 警上發言 → 退水
   e.next(); // 退水 → 投票
   return e;
 }
@@ -77,7 +78,8 @@ void main() {
     test('只有一人上警 → 不必投票，直接當選', () {
       final e = SheriffElection(state: _state());
       e.toggleCandidate(3);
-      e.next(); // 上警 → 退水
+      e.next(); // 上警 → 警上發言
+      e.next(); // 警上發言 → 退水
       e.next(); // 退水（沒人退）→ 只剩一人，直接當選
 
       expect(e.finished, isTrue);
@@ -101,6 +103,7 @@ void main() {
       e
         ..toggleCandidate(3)
         ..toggleCandidate(7)
+        ..next() // 上警 → 警上發言
         ..next(); // → 退水
       e
         ..toggleWithdraw(3)
@@ -117,6 +120,7 @@ void main() {
         ..toggleCandidate(3)
         ..toggleCandidate(7)
         ..toggleCandidate(11)
+        ..next() // 上警 → 警上發言
         ..next();
       e
         ..toggleWithdraw(7)
@@ -130,6 +134,7 @@ void main() {
       final e = SheriffElection(state: _state());
       e
         ..toggleCandidate(3)
+        ..next() // 上警 → 警上發言
         ..next();
       e.toggleWithdraw(9); // 9 號沒上警
 
@@ -145,6 +150,7 @@ void main() {
         ..toggleCandidate(3)
         ..toggleCandidate(7)
         ..toggleCandidate(11)
+        ..next() // 上警 → 警上發言
         ..next();
       e
         ..toggleWithdraw(11) // 退水
@@ -269,6 +275,7 @@ void main() {
         ..toggleCandidate(3)
         ..toggleCandidate(7)
         ..toggleCandidate(11)
+        ..next() // 上警 → 警上發言
         ..next();
       e
         ..toggleWithdraw(11)
@@ -322,9 +329,15 @@ void main() {
       e
         ..toggleCandidate(3)
         ..toggleCandidate(7)
+        ..next() // 上警 → 警上發言
         ..next();
 
       expect(e.stage, ElectionStage.withdraw);
+
+      // 警上發言也是一個階段，所以要退兩步才回到上警。
+      expect(e.undo(), isTrue);
+      expect(e.stage, ElectionStage.campaignSpeech);
+
       expect(e.undo(), isTrue);
       expect(e.stage, ElectionStage.nominate);
       expect(e.candidates, {3, 7}, reason: '名單保留，法官可以直接改');

@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 
+import '../../core/engine/badge_succession.dart';
+import '../../core/engine/speech_timer.dart';
+import '../../core/engine/win_checker.dart';
 import '../../core/models/game_state.dart';
 import '../../core/models/night_action.dart';
 import '../../core/models/role.dart';
 import '../../shared/theme.dart';
+import '../day/badge_succession_page.dart';
+import '../day/speech_order_page.dart';
+import '../day/speech_timer_page.dart';
+import '../review/game_over_page.dart';
+import '../review/review_log_button.dart';
 import 'night_flow_page.dart';
 
 /// 夜晚結算結果。
@@ -24,12 +32,17 @@ class NightResultPage extends StatelessWidget {
   /// 首夜自動填為平民的座次。
   final List<int> autoFilledVillagers;
 
+  WinCheck get _win => WinChecker.check(state);
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: Text('第 ${state.dayNumber} 夜　結算')),
+      appBar: AppBar(
+        title: Text('第 ${state.dayNumber} 夜　結算'),
+        actions: [ReviewLogButton(state: state)],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -263,26 +276,101 @@ class NightResultPage extends StatelessWidget {
           ),
 
           const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: () => _nextNight(context),
-            icon: const Icon(Icons.nightlight_round),
-            label: Text('進入第 ${state.dayNumber + 1} 夜'),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '白天流程（警長競選、發言計時、投票）尚未實作，'
-            '目前先直接進入下一夜以便測試夜晚結算。',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-          ),
+          // 夜晚結算完就要檢查勝負 —— 不必等白天走完。
+          if (_win.isOver) ...[
+            _InfoCard(
+              icon: Icons.emoji_events_rounded,
+              iconColor: _win.result == GameResult.wolvesWin
+                  ? WgmTheme.wolfColor
+                  : WgmTheme.godColor,
+              title: '${_win.result.labelZh} —— ${_win.reason}',
+              body: '昨晚的死亡已經分出勝負，白天不必再進行。',
+            ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: () => _toGameOver(context),
+              icon: const Icon(Icons.emoji_events_rounded),
+              label: const Text('查看結果'),
+            ),
+          ] else ...[
+            // 遺言由法官決定要不要給 —— 誰有遺言權各家規則不同
+            // （常見的是首夜死者與被放逐者才有），App 不替桌上決定，
+            // 只在有死者時提供碼表。
+            if (outcome.deadSeats.isNotEmpty) ...[
+              OutlinedButton.icon(
+                onPressed: () => _toLastWords(context),
+                icon: const Icon(Icons.record_voice_over_outlined, size: 18),
+                label: Text('${outcome.deadSeats.join('、')} 號遺言計時'),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            // 警長昨晚也死了 → 下一站是警徽流，按鈕要講實話。
+            if (BadgeSuccession.isDue(state))
+              FilledButton.icon(
+                onPressed: () => _toSpeechOrder(context),
+                icon: const Icon(Icons.shield_rounded),
+                label: Text('${state.sheriffSeat} 號警長出局，處理警徽流'),
+              )
+            else
+              FilledButton.icon(
+                onPressed: () => _toSpeechOrder(context),
+                icon: const Icon(Icons.record_voice_over_rounded),
+                label: const Text('決定發言順序'),
+              ),
+            const SizedBox(height: 8),
+            Text(
+              '接著是發言順序 → 放逐投票 → 下一夜。'
+              '發言計時與騎士決鬥尚未實作。',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  void _nextNight(BuildContext context) {
+  /// 遺言計時。講完退回這一頁，法官再繼續往下走 —— 不接管流程，
+  /// 因為要不要給遺言、給誰，都是桌上的規則，不是 App 的。
+  void _toLastWords(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (inner) => SpeechTimerPage(
+          state: state,
+          order: outcome.deadSeats,
+          phase: SpeechPhase.lastWords,
+          finishLabel: '遺言結束',
+          onFinished: () => Navigator.of(inner).pop(),
+        ),
+      ),
+    );
+  }
+
+  /// 夜晚就分出勝負時直接進結果頁，白天整套流程都不必走。
+  void _toGameOver(BuildContext context) {
     Navigator.of(context).pushReplacement(
-      NightFlowPage.route(state),
+      MaterialPageRoute<void>(
+        builder: (_) => GameOverPage(state: state, check: _win),
+      ),
+    );
+  }
+
+  /// 公布死訊之後才決定發言順序 —— 單死與雙死的規則不同，
+  /// 得先知道死了幾個才判斷得出來。
+  ///
+  /// 警長昨晚出局時，警徽流要插在發言順序**之前** —— 警左警右由警長決定，
+  /// 得先知道現在誰是警長。
+  void _toSpeechOrder(BuildContext context) {
+    Navigator.of(context).pushReplacement(
+      BadgeSuccessionPage.routeIfDue(
+        state,
+        next: () => SpeechOrderPage.routeThenExile(
+          state,
+          outcome.deadSeats,
+          nextNight: () => NightFlowPage.route(state),
+        ),
+      ),
     );
   }
 }

@@ -67,7 +67,15 @@ class RuleFlags {
     this.mechanicGuardReflectsPoison = true,
     this.mechanicDoubleKnifeBreaksShield = true,
     this.sheriffElection = true,
+    this.speechSeconds = 120,
   });
+
+  /// 每位玩家的發言額度（秒）。預設 2 分鐘。
+  ///
+  /// 這是**建議值**，不是硬性限制 —— 計時頁上法官隨時可以改，時間到了也
+  /// 只是提示，不會強制中斷。警上發言、白天發言、平票 PK 發言與遺言
+  /// 共用同一個額度。
+  final int speechSeconds;
 
   /// 本局是否有警長競選（警長局）。
   ///
@@ -181,6 +189,15 @@ class RuleFlags {
       );
     }
 
+    final speech = json['speechSeconds'] ?? defaults.speechSeconds;
+    if (speech is! int || speech <= 0) {
+      throw PresetFormatException(
+        presetId: presetId,
+        field: 'rules.speechSeconds',
+        message: '必須是正整數秒數，實際為 $speech',
+      );
+    }
+
     final tieRaw = json['tieBreak'] as String? ?? defaults.tieBreak.jsonValue;
     final tie = TieBreak.fromJson(tieRaw);
     if (tie == null) {
@@ -241,6 +258,7 @@ class RuleFlags {
         defaults.mechanicDoubleKnifeBreaksShield,
       ),
       sheriffElection: readBool('sheriffElection', defaults.sheriffElection),
+      speechSeconds: speech,
     );
   }
 

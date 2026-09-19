@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/engine/night_flow.dart';
 import '../../core/engine/night_flow_machine.dart';
 import '../../core/models/game_state.dart';
+import '../../core/models/log_entry.dart';
 import '../../core/models/night_action.dart';
 import '../../core/models/role.dart';
 import '../../shared/theme.dart';
@@ -37,6 +38,15 @@ class NightFlowPage extends StatefulWidget {
   /// 單獨公開是為了讓測試（與日後的撤銷堆疊）能在建立頁面之前先存快照。
   static void enterNight(GameState state) {
     final isFirstNight = state.dayNumber == 0;
+    if (isFirstNight) {
+      // 復盤日誌的第一筆 —— 之後每一夜每一天都接在這後面。
+      state.log.add(
+        round: 0,
+        isNight: true,
+        kind: LogKind.setup,
+        text: '開局：${state.preset.name}（${state.preset.playerCount} 人）',
+      );
+    }
     state
       ..dayNumber = isFirstNight ? 1 : state.dayNumber + 1
       ..phase = GamePhase.night;

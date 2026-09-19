@@ -1,3 +1,4 @@
+import '../log/game_log.dart';
 import 'player.dart';
 import 'preset.dart';
 import 'role.dart';
@@ -33,7 +34,8 @@ class GameState {
           preset.playerCount,
           (i) => Player(seat: i + 1),
           growable: false,
-        );
+        ),
+        log = GameLog();
 
   GameState._({
     required this.preset,
@@ -52,6 +54,8 @@ class GameState {
     required this.lastMechanicGuardTarget,
     required this.mechanicCharmedSeat,
     required this.lastMechanicCharmTarget,
+    required this.knightDuelUsed,
+    required this.log,
   });
 
   final Preset preset;
@@ -112,6 +116,16 @@ class GameState {
 
   /// 機械狼（學到狼美人）前一晚魅惑的座次。
   int? lastMechanicCharmTarget;
+
+  // ---- 騎士 ----
+
+  /// 騎士是否已經翻牌決鬥過。**整局只能決鬥一次**（擔當 2026-09-19 指定），
+  /// 所以決鬥完就算活下來也不能再發動。
+  bool knightDuelUsed = false;
+
+  /// 復盤日誌。**只寫入，不用來推導狀態** —— 局面的真相在這個物件的其他
+  /// 欄位裡，這份只是給人看的。撤銷會連它一起退回去。
+  final GameLog log;
 
   /// 機械狼在第 [night] 夜是否已能使用學到的技能。
   ///
@@ -272,6 +286,8 @@ class GameState {
     lastMechanicGuardTarget = snapshot.lastMechanicGuardTarget;
     mechanicCharmedSeat = snapshot.mechanicCharmedSeat;
     lastMechanicCharmTarget = snapshot.lastMechanicCharmTarget;
+    knightDuelUsed = snapshot.knightDuelUsed;
+    log.restoreFrom(snapshot.log);
   }
 
   /// 深拷貝快照，供撤銷使用。
@@ -295,5 +311,7 @@ class GameState {
         lastMechanicGuardTarget: lastMechanicGuardTarget,
         mechanicCharmedSeat: mechanicCharmedSeat,
         lastMechanicCharmTarget: lastMechanicCharmTarget,
+        knightDuelUsed: knightDuelUsed,
+        log: log.copy(),
       );
 }

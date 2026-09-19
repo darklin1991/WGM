@@ -1,4 +1,5 @@
 import '../models/game_state.dart';
+import '../models/log_entry.dart';
 import 'undo_stack.dart';
 
 /// 警長競選的階段。
@@ -6,9 +7,12 @@ enum ElectionStage {
   /// 上警：誰要參選。
   nominate,
 
-  /// 退水：警上發言之後，候選人可以退出。
+  /// 警上發言：候選人依序拉票，逐人計時。
   ///
-  /// 發言本身由法官口頭主持，App 不計時也不排序 —— 這一階段只收退水名單。
+  /// 只是計時，不動任何狀態 —— 收退水是下一階段的事。
+  campaignSpeech,
+
+  /// 退水：警上發言之後，候選人可以退出。
   withdraw,
 
   /// 投票：**按候選人歸票**。
@@ -72,6 +76,13 @@ class SheriffElection {
   /// 這一輪實際在競選的人。
   Set<int> get activeCandidates =>
       isRunoff ? runoffCandidates : candidates.difference(withdrawn);
+
+  /// 警上發言的順序：上警的人依**座號遞增**排。
+  ///
+  /// 桌上決定從誰先講的方式各家不同（抽號碼、從最小號開始…），所以這裡
+  /// 只給一個可預期的預設排法；計時頁上點號碼就能跳到任何一位，
+  /// 法官照桌上實際的順序走即可。這一步還沒收退水，所以名單是全部上警者。
+  List<int> get campaignSpeechOrder => candidates.toList()..sort();
 
   /// 有投票權的人。
   ///
@@ -157,6 +168,9 @@ class SheriffElection {
           _finishWithNoSheriff();
           return;
         }
+        stage = ElectionStage.campaignSpeech;
+
+      case ElectionStage.campaignSpeech:
         stage = ElectionStage.withdraw;
 
       case ElectionStage.withdraw:
@@ -223,6 +237,7 @@ class SheriffElection {
     sheriffSeat = seat;
     state.sheriffSeat = seat;
     stage = ElectionStage.done;
+    _log('$seat 號當選警長');
   }
 
   void _finishWithNoSheriff() {
@@ -230,7 +245,16 @@ class SheriffElection {
     sheriffSeat = null;
     state.sheriffSeat = null;
     stage = ElectionStage.done;
+    _log('本局無警長');
   }
+
+  /// 寫進復盤日誌。競選固定在第 1 天。
+  void _log(String text) => state.log.add(
+        round: 1,
+        isNight: false,
+        kind: LogKind.election,
+        text: text,
+      );
 
   // ---- 撤銷 ----
 
@@ -240,6 +264,7 @@ class SheriffElection {
 
   String get _stageLabel => switch (stage) {
         ElectionStage.nominate => '上警',
+        ElectionStage.campaignSpeech => '警上發言',
         ElectionStage.withdraw => '退水',
         ElectionStage.vote => '投票',
         ElectionStage.runoffVote => 'PK 重投',
