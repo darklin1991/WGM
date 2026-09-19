@@ -1,4 +1,5 @@
 import '../models/game_state.dart';
+import '../models/log_entry.dart';
 import '../models/night_action.dart';
 import '../models/player.dart';
 import '../models/role.dart';
@@ -392,6 +393,120 @@ class NightArbitrator {
     state.lastMechanicGuardTarget = actions.mechanicGuardTarget;
     state.lastCharmTarget = actions.wolfBeautyCharmTarget;
     state.lastMechanicCharmTarget = actions.mechanicCharmTarget;
+
+    _writeLog(state, actions, outcome);
+  }
+
+  /// 把這一夜寫進復盤日誌。
+  ///
+  /// 和狀態變更寫在同一處（[apply] 的結尾）—— 分開寫就會有一邊漏掉。
+  void _writeLog(GameState state, NightActions actions, NightOutcome outcome) {
+    final log = state.log;
+    final night = actions.night;
+
+    void action(String text, [List<int> seats = const []]) => log.add(
+          round: night,
+          isNight: true,
+          kind: LogKind.nightAction,
+          text: text,
+          seats: seats,
+        );
+    void info(String text, [List<int> seats = const []]) => log.add(
+          round: night,
+          isNight: true,
+          kind: LogKind.info,
+          text: text,
+          seats: seats,
+        );
+
+    // ---- 行動 ----
+    if (actions.guardTarget != null) {
+      action('守衛守 ${actions.guardTarget} 號', [actions.guardTarget!]);
+    }
+    for (final seat in actions.wolfTargets.toSet()) {
+      final times = actions.wolfTargets.where((t) => t == seat).length;
+      action(times > 1 ? '狼刀 $seat 號（兩刀集中）' : '狼刀 $seat 號', [seat]);
+    }
+    if (actions.wolfBeautyCharmTarget != null) {
+      action('狼美人魅惑 ${actions.wolfBeautyCharmTarget} 號',
+          [actions.wolfBeautyCharmTarget!]);
+    }
+    if (actions.witchHealTarget != null) {
+      action('女巫用解藥救 ${actions.witchHealTarget} 號',
+          [actions.witchHealTarget!]);
+    }
+    if (actions.witchPoisonTarget != null) {
+      action('女巫用毒藥毒 ${actions.witchPoisonTarget} 號',
+          [actions.witchPoisonTarget!]);
+    }
+
+    // ---- 機械狼 ----
+    if (outcome.mechanicLearnedRole != null) {
+      action('機械狼學到${outcome.mechanicLearnedRole!.nameZh}（隔夜生效）');
+    }
+    if (actions.mechanicGuardTarget != null) {
+      action('機械狼（守衛）守 ${actions.mechanicGuardTarget} 號',
+          [actions.mechanicGuardTarget!]);
+    }
+    if (actions.mechanicPoisonTarget != null) {
+      action('機械狼（女巫）毒 ${actions.mechanicPoisonTarget} 號',
+          [actions.mechanicPoisonTarget!]);
+    }
+
+    // ---- 情報 ----
+    if (outcome.seerTarget != null) {
+      info(
+        '預言家查驗 ${outcome.seerTarget} 號 → '
+        '${outcome.seerSawWolf ? "查殺" : "金水"}',
+        [outcome.seerTarget!],
+      );
+    }
+    if (outcome.psychicResult != null) {
+      final r = outcome.psychicResult!;
+      info('通靈師查驗 ${r.seat} 號 → ${r.revealedRole?.nameZh ?? "尚未登記"}',
+          [r.seat]);
+    }
+    if (outcome.mechanicSeerTarget != null) {
+      info(
+        '機械狼（預言家）查驗 ${outcome.mechanicSeerTarget} 號 → '
+        '${outcome.mechanicSeerSawWolf ? "查殺" : "金水"}',
+        [outcome.mechanicSeerTarget!],
+      );
+    }
+    if (outcome.mechanicPsychicResult != null) {
+      final r = outcome.mechanicPsychicResult!;
+      info('機械狼（通靈師）查驗 ${r.seat} 號 → ${r.revealedRole?.nameZh ?? "尚未登記"}',
+          [r.seat]);
+    }
+
+    // ---- 裁決與結果 ----
+    log.addAll(
+      round: night,
+      isNight: true,
+      kind: LogKind.ruling,
+      texts: outcome.notes,
+    );
+
+    if (outcome.deaths.isEmpty) {
+      log.add(
+        round: night,
+        isNight: true,
+        kind: LogKind.death,
+        text: '平安夜，沒有人出局',
+      );
+    } else {
+      for (final d in outcome.deaths) {
+        log.add(
+          round: night,
+          isNight: true,
+          kind: LogKind.death,
+          text: '${d.seat} 號出局'
+              '（${state.playerAt(d.seat).role?.nameZh ?? "未知"}・'
+              '${d.cause.labelZh}）',
+          seats: [d.seat],
+        );
+      }
+    }
   }
 
   /// 守衛可否守 [seat]（不可連續兩晚守同一人）。

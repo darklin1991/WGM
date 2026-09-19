@@ -56,6 +56,19 @@ Future<void> _tapText(WidgetTester tester, String text) async {
   await tester.pumpAndSettle();
 }
 
+/// 走完警上發言：逐位按「下一位」，講到最後一位才會出現結束鍵。
+Future<void> _passCampaignSpeech(WidgetTester tester) async {
+  for (var guard = 0; guard < 20; guard++) {
+    final next = find.textContaining('下一位（');
+    if (next.evaluate().isEmpty) break;
+    await tester.ensureVisible(next.first);
+    await tester.pumpAndSettle();
+    await tester.tap(next.first);
+    await tester.pumpAndSettle();
+  }
+  await _tapText(tester, '警上發言結束');
+}
+
 void main() {
   /// 建好競選頁；[finished] 會在競選結束時被設成 true。
   Future<GameState> pump(WidgetTester tester, {List<bool>? finished}) async {
@@ -89,6 +102,7 @@ void main() {
 
     await _tapSeat(tester, 3);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
 
     expect(find.text('有人要退水嗎？'), findsOneWidget);
     await _tapText(tester, '退水完畢，開始投票');
@@ -105,6 +119,7 @@ void main() {
     await _tapSeat(tester, 3);
     await _tapSeat(tester, 7);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
     await _tapText(tester, '退水完畢，開始投票');
 
     expect(find.text('警長投票'), findsOneWidget);
@@ -134,6 +149,7 @@ void main() {
     await _tapSeat(tester, 3);
     await _tapSeat(tester, 7);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
     await _tapText(tester, '退水完畢，開始投票');
 
     await _tapText(tester, '3 號');
@@ -155,6 +171,7 @@ void main() {
     await _tapSeat(tester, 7);
     await _tapSeat(tester, 11);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
 
     // 11 號退水。
     await _tapSeat(tester, 11);
@@ -175,6 +192,7 @@ void main() {
     await _tapSeat(tester, 3);
     await _tapSeat(tester, 7);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
     await _tapText(tester, '退水完畢，開始投票');
 
     await _tapText(tester, '3 號');
@@ -191,6 +209,7 @@ void main() {
     await _tapSeat(tester, 3);
     await _tapSeat(tester, 7);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
     await _tapText(tester, '退水完畢，開始投票');
 
     await _tapText(tester, '3 號');
@@ -210,13 +229,20 @@ void main() {
     await _tapSeat(tester, 3);
     await _tapSeat(tester, 7);
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
 
     expect(find.text('有人要退水嗎？'), findsOneWidget);
+
+    // 警上發言也是一個階段，所以要退兩步才回到上警。
+    await _tapText(tester, '撤銷上一步（警上發言）');
+    expect(find.text('警上發言'), findsOneWidget);
+
     await _tapText(tester, '撤銷上一步（上警）');
 
     expect(find.text('要上警的請舉手'), findsOneWidget);
     // 名單保留 → 直接按下一步仍是兩位候選人。
     await _tapText(tester, '上警完畢');
+    await _passCampaignSpeech(tester);
     await _tapText(tester, '退水完畢，開始投票');
     expect(find.text('3 號 0 票'), findsOneWidget);
     expect(find.text('7 號 0 票'), findsOneWidget);

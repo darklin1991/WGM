@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../core/engine/day_controller.dart';
+import '../../core/engine/speech_timer.dart';
 import '../../core/models/game_state.dart';
 import '../../shared/theme.dart';
 import '../night/seat_picker.dart';
+import 'speech_timer_view.dart';
 
 /// 警長競選頁。
 ///
@@ -40,13 +42,35 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
   bool get _isVoting =>
       _e.stage == ElectionStage.vote || _e.stage == ElectionStage.runoffVote;
 
+  bool get _isCampaignSpeech => _e.stage == ElectionStage.campaignSpeech;
+
+  /// 警上發言那一階段的碼表。進到那一階段才建，離開就丟掉 ——
+  /// 計時不影響任何狀態，退回來重講重新計時就好。
+  SpeechTimer? _speech;
+
+  SpeechTimer get _speechTimer => _speech ??= SpeechTimer(
+        order: _e.campaignSpeechOrder,
+        seconds: _e.state.preset.rules.speechSeconds,
+      );
+
   void _next() {
-    setState(_e.next);
+    setState(() {
+      _e.next();
+      _speech = null;
+    });
     if (_e.finished) widget.onFinished();
+  }
+
+  void _undo() {
+    setState(() {
+      _e.undo();
+      _speech = null;
+    });
   }
 
   String get _title => switch (_e.stage) {
         ElectionStage.nominate => '要上警的請舉手',
+        ElectionStage.campaignSpeech => '警上發言',
         ElectionStage.withdraw => '有人要退水嗎？',
         ElectionStage.vote => '警長投票',
         ElectionStage.runoffVote => '平票 PK · 重新投票',
@@ -56,6 +80,8 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
   String get _hint => switch (_e.stage) {
         ElectionStage.nominate =>
           '圈選所有上警的人。沒人上警就直接按下一步，本局無警長',
+        ElectionStage.campaignSpeech =>
+          '候選人依序拉票。桌上實際從誰先講，點號碼就能跳過去',
         ElectionStage.withdraw =>
           '警上發言結束後問一次。沒人退水就直接按下一步',
         ElectionStage.vote || ElectionStage.runoffVote =>
@@ -70,6 +96,8 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
     switch (_e.stage) {
       case ElectionStage.nominate:
         return _e.state.alivePlayers.map((p) => p.seat).toSet();
+      case ElectionStage.campaignSpeech:
+        return const {};
       case ElectionStage.withdraw:
         return _e.candidates;
       case ElectionStage.vote:
@@ -87,6 +115,7 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
   /// 目前圈起來的座次。
   Set<int> get _selected => switch (_e.stage) {
         ElectionStage.nominate => _e.candidates,
+        ElectionStage.campaignSpeech => const {},
         ElectionStage.withdraw => _e.withdrawn,
         ElectionStage.vote || ElectionStage.runoffVote => {
             for (final entry in _e.votes.entries)
@@ -114,6 +143,8 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
       switch (_e.stage) {
         case ElectionStage.nominate:
           _e.toggleCandidate(seat);
+        case ElectionStage.campaignSpeech:
+          break;
         case ElectionStage.withdraw:
           _e.toggleWithdraw(seat);
         case ElectionStage.vote:
@@ -163,17 +194,29 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 投票階段：上方先挑要歸票的候選人。
-                  if (_isVoting) _candidateRow(scheme),
-                  SeatPicker(
-                    state: _e.state,
-                    selected: _selected,
-                    onTap: _tapSeat,
-                    selectableSeats: _selectable,
-                    disabledReason: _disabledReasons,
-                    showRoleName: true,
-                  ),
-                  if (_isVoting) _tallyCard(scheme),
+                  // 警上發言：整個版面換成碼表，不用座位格。
+                  if (_isCampaignSpeech)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: SpeechTimerView(
+                        timer: _speechTimer,
+                        phase: SpeechPhase.campaign,
+                        onFinished: _next,
+                      ),
+                    )
+                  else ...[
+                    // 投票階段：上方先挑要歸票的候選人。
+                    if (_isVoting) _candidateRow(scheme),
+                    SeatPicker(
+                      state: _e.state,
+                      selected: _selected,
+                      onTap: _tapSeat,
+                      selectableSeats: _selectable,
+                      disabledReason: _disabledReasons,
+                      showRoleName: true,
+                    ),
+                    if (_isVoting) _tallyCard(scheme),
+                  ],
                 ],
               ),
             ),
@@ -188,15 +231,18 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: OutlinedButton.icon(
-                        onPressed: () => setState(_e.undo),
+                        onPressed: _undo,
                         icon: const Icon(Icons.undo_rounded, size: 18),
                         label: Text('撤銷上一步（${_e.undoLabel}）'),
                       ),
                     ),
-                  FilledButton(
-                    onPressed: _next,
-                    child: Text(_nextLabel),
-                  ),
+                  // 警上發言的推進鍵長在碼表上（「警上發言結束」），
+                  // 這裡再放一顆就會有兩個下一步。
+                  if (!_isCampaignSpeech)
+                    FilledButton(
+                      onPressed: _next,
+                      child: Text(_nextLabel),
+                    ),
                 ],
               ),
             ),
@@ -209,6 +255,7 @@ class _SheriffElectionPageState extends State<SheriffElectionPage> {
   String get _nextLabel => switch (_e.stage) {
         ElectionStage.nominate =>
           _e.candidates.isEmpty ? '沒人上警，跳過競選' : '上警完畢',
+        ElectionStage.campaignSpeech => '警上發言結束',
         ElectionStage.withdraw => '退水完畢，開始投票',
         ElectionStage.vote || ElectionStage.runoffVote => '算票',
         ElectionStage.done => '下一步',
