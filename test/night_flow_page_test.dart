@@ -122,6 +122,11 @@ void main() {
     await _tapSeat(tester, 1); // 查到狼
     await _next(tester);
 
+    // 查驗結果當場比給預言家看，再讓他閉眼。
+    expect(find.text('比給預言家看'), findsOneWidget);
+    expect(find.text('查殺'), findsOneWidget);
+    await _next(tester);
+
     // ---- 步驟 5：獵人（登記號碼後給開槍手勢）----
     expect(find.text('獵人請睜眼'), findsOneWidget);
     expect(find.text('請填入座次號碼，接著給開槍手勢'), findsOneWidget);
@@ -198,6 +203,8 @@ void main() {
     await _next(tester);
     await _tapSeat(tester, 1);
     await _next(tester);
+    expect(find.text('比給預言家看'), findsOneWidget);
+    await _next(tester);
 
     // 獵人 —— 登記號碼後給手勢。
     expect(find.text('獵人請睜眼'), findsOneWidget);
@@ -263,6 +270,13 @@ void main() {
       await _next(tester);
 
       await _tapSeat(tester, 2); // 預言家查驗
+      await _next(tester);
+
+      // 結果要**當場**比給預言家看 —— 2 號是狼，所以是查殺。
+      // 等到夜晚結算頁才顯示就來不及了，那時預言家早就閉眼。
+      expect(find.text('比給預言家看'), findsOneWidget);
+      expect(find.text('查殺'), findsOneWidget);
+      expect(find.text('2 號是狼人'), findsOneWidget);
       await _next(tester);
 
       expect(find.text('獵人請睜眼'), findsOneWidget);

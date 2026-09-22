@@ -34,7 +34,8 @@ class Role {
   ///
   /// 只有一般狼與平民可以多人；其餘身分每個板子只會有一位，
   /// 引擎也依此假設（`GameState.seatOfRole` 只回傳第一個）。
-  bool get allowsMultiple => id == 'wolf' || id == 'villager';
+  bool get allowsMultiple =>
+      id == 'wolf' || id == 'villager' || id == 'awakenedGargoyle';
 
   @override
   String toString() => 'Role($id)';
@@ -147,6 +148,81 @@ abstract final class Roles {
     kind: RoleKind.god,
   );
 
+  /// 覺醒石像鬼：狼隊主刀，**只有首夜**可以轉換一位相鄰座次的玩家。
+  ///
+  /// 兩隻互認、一起決定狼刀（就是一般的狼隊步驟）。覺醒版**沒有查驗**——
+  /// 原本石像鬼的「查真實身分」換成了轉換。
+  static const awakenedGargoyle = Role(
+    id: 'awakenedGargoyle',
+    nameZh: '覺醒石像鬼',
+    camp: Camp.wolf,
+    kind: RoleKind.wolf,
+    nightPriority: 10,
+  );
+
+  /// 白貓：任何原因出局時翻牌，並**多活到下一次放逐投票結束**才真正離場。
+  ///
+  /// 延後期間**算存活** —— 有投票權、可以發言、勝負判定也算他活著
+  /// （擔當 2026-09-22 指定）。所以實作上是把死亡整個延後，
+  /// 不做「已死但還在場」的中間狀態。
+  static const whiteCat = Role(
+    id: 'whiteCat',
+    nameZh: '白貓',
+    camp: Camp.good,
+    kind: RoleKind.god,
+  );
+
+  /// 攝夢人：每晚指定一名夢遊者。
+  ///
+  /// 夢遊者**免疫夜間傷害**（連女巫的毒都擋，比守衛強一截），且不知道自己在夢遊。
+  /// **連續兩晚被攝的人會死**，死因是夢死，擋不住也不能開槍。
+  /// 攝夢人夜裡出局時，當晚的夢遊者一併死亡。
+  static const dreamWeaver = Role(
+    id: 'dreamWeaver',
+    nameZh: '攝夢人',
+    camp: Camp.good,
+    kind: RoleKind.god,
+    nightPriority: 2,
+  );
+
+  /// 熊：每晚查看**左右兩位鄰座**，其中有狼就咆哮。
+  ///
+  /// 法官給的是**是／否**，不是告訴他哪一位 —— 所以這一步沒有目標要選，
+  /// 與獵人的開槍手勢同型。鄰座死亡時**往外順延**，取的是環狀座次上
+  /// 最近的兩位存活玩家。
+  static const bear = Role(
+    id: 'bear',
+    nameZh: '熊',
+    camp: Camp.good,
+    kind: RoleKind.god,
+    nightPriority: 6,
+  );
+
+  /// 河豚：無夜間行動。**被放逐時**可主動翻牌，帶走所有這一輪投他的人。
+  ///
+  /// 帶走的人**不能開槍**（擔當 2026-09-23 指定）—— 與騎士決鬥同理，
+  /// 死因既不是刀也不是推。
+  static const pufferfish = Role(
+    id: 'pufferfish',
+    nameZh: '河豚',
+    camp: Camp.good,
+    kind: RoleKind.god,
+  );
+
+  /// 暗戀者：首夜選一名暗戀對象，**勝負跟著對象的陣營走**，雙方都不知情。
+  ///
+  /// **本人永遠算好人**（擔當 2026-09-22 指定）—— 預言家查他是金水，
+  /// 屠邊也算神職人頭。跟著對象走的只有「誰贏」這一件事，見 `WinChecker`。
+  ///
+  /// 只有首夜行動，之後不再叫起來。
+  static const secretAdmirer = Role(
+    id: 'secretAdmirer',
+    nameZh: '暗戀者',
+    camp: Camp.good,
+    kind: RoleKind.god,
+    nightPriority: 5,
+  );
+
   static const villager = Role(
     id: 'villager',
     nameZh: '平民',
@@ -159,6 +235,7 @@ abstract final class Roles {
     wolf,
     wolfKing,
     wolfBeauty,
+    awakenedGargoyle,
     mechanicWolf,
     witch,
     seer,
@@ -166,13 +243,25 @@ abstract final class Roles {
     knight,
     hunter,
     idiot,
+    whiteCat,
+    dreamWeaver,
+    bear,
+    pufferfish,
+    secretAdmirer,
     villager,
   ];
 
   /// 夜晚會與狼隊一起睜眼、互相識別並共同決定狼刀的角色。
   ///
   /// **機械狼不在其中** —— 牠不與小狼相認，必須單獨睜眼。
-  static const wolfTeamIds = <String>{'wolf', 'wolfKing', 'wolfBeauty'};
+  /// 覺醒石像鬼也在其中 —— 牠們互認、一起決定狼刀，就是這個板子的狼隊。
+  /// 連帶讓機械狼的帶刀條件自動變成「兩隻石像鬼都出局」。
+  static const wolfTeamIds = <String>{
+    'wolf',
+    'wolfKing',
+    'wolfBeauty',
+    'awakenedGargoyle',
+  };
 
   /// 槍牌：死亡時可以開槍帶人的身分。機械狼學到這些才拿得到槍。
   static const gunRoleIds = <String>{'hunter', 'wolfKing'};

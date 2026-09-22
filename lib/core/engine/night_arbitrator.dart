@@ -32,6 +32,89 @@ class NightArbitrator {
     DeathCause.exile,
   };
 
+  /// 查驗類技能（預言家、通靈師）看到的身分。
+  ///
+  /// 機械狼學習之後，查驗看到的是**牠學到的身分**，不是機械狼本身
+  /// —— 擔當 2026-09-19 指定，而且**預言家也一起騙過**：學到好人身分
+  /// 就給金水。偽裝是機械狼的核心強度，不只騙通靈師。
+  ///
+  /// **學習當晚就生效**（擔當同日指定），所以要把本夜還沒結算的學習意圖
+  /// [learnTargetTonight] 一起算進來 —— 學到的身分寫進 [GameState] 是
+  /// 結算之後的事，光看局面會慢一夜。技能隔夜生效、偽裝當晚生效，
+  /// 兩者刻意不同步，不要「順手」改成一致。
+  ///
+  /// 查驗與結算共用這一個判定 —— 分兩處算遲早會給出不一致的答案。
+  static Role? apparentRoleAt(
+    GameState state,
+    int seat, {
+    int? learnTargetTonight,
+  }) {
+    final actual = state.playerAt(seat).role;
+    if (actual?.id != Roles.mechanicWolf.id) return actual;
+
+    // 本夜剛學的優先；否則用之前學到的。學習對象的身分若還沒登記
+    // （首夜邊問邊登記），就沒得偽裝，照實顯示機械狼。
+    final pending = learnTargetTonight == null
+        ? null
+        : state.playerAt(learnTargetTonight).role;
+    return pending ?? state.mechanicWolfLearnedRole ?? actual;
+  }
+
+  /// 熊兩側的鄰座 —— 環狀座次上**最近的兩位存活玩家**。
+  ///
+  /// 鄰座死亡時**往外順延**（擔當 2026-09-22 指定），所以不是固定的號碼，
+  /// 每晚都要重算。回傳 `[逆時鐘那位, 順時鐘那位]`，人數不足時可能少於兩位、
+  /// 甚至是空的（只剩熊自己）。
+  ///
+  /// 兩側順延到同一個人時只算一位 —— 場上剩三人時會發生。
+  static List<int> bearNeighbors(GameState state) {
+    final bear = state.seatOfRole(Roles.bear.id);
+    if (bear == null || !state.playerAt(bear).alive) return const [];
+
+    final seats = <int>{};
+    for (final clockwise in [false, true]) {
+      final seat = state.nextAliveSeat(bear, clockwise: clockwise);
+      // 只剩熊自己時會繞回自己，那不算鄰座。
+      if (seat != null && seat != bear) seats.add(seat);
+    }
+    return seats.toList()..sort();
+  }
+
+  /// 熊今晚會不會咆哮 —— 兩側鄰座裡有狼就咆哮。
+  ///
+  /// **被轉換者立刻算狼，沒有首夜延遲**（擔當 2026-09-22 指定）。
+  /// 查驗那邊是第一夜金水、第二夜起查殺，熊沒有這個延遲 —— 所以熊
+  /// 比預言家早一夜察覺轉換，這是熊在風聲諜影的價值。
+  /// 兩者刻意不同步，不要為了「一致」把它們改成同一套。
+  static bool bearGrowls(GameState state) => bearNeighbors(state).any(
+        (seat) =>
+            state.playerAt(seat).role?.camp == Camp.wolf ||
+            state.isConverted(seat),
+      );
+
+  /// **預言家**看到的陣營（金水／查殺）。
+  ///
+  /// 與 [apparentRoleAt] 分開是必要的：被轉換者身上兩者會**給出不同答案**。
+  ///
+  /// | 查驗者 | 查被轉換的女巫（第二夜起） |
+  /// |---|---|
+  /// | 預言家（看陣營） | **查殺** |
+  /// | 通靈師／魔鏡少女（看身分） | **女巫** —— 他確實還是女巫 |
+  ///
+  /// 擔當 2026-09-22 指定如此。兩邊對不上正是識破轉換的線索，
+  /// 不要為了「一致」把其中一邊改掉。
+  ///
+  /// 被轉換者**第一夜仍是好人**，第二夜起才是狼。
+  static Camp? apparentCampAt(
+    GameState state,
+    int seat, {
+    int? learnTargetTonight,
+  }) {
+    if (state.convertedShowsAsWolf(seat)) return Camp.wolf;
+    return apparentRoleAt(state, seat, learnTargetTonight: learnTargetTonight)
+        ?.camp;
+  }
+
   /// 結算一個夜晚，回傳結果。**不修改 [state]** —— 套用結果請用 [apply]。
   NightOutcome settle(GameState state, NightActions actions) {
     final rules = state.preset.rules;
@@ -115,14 +198,31 @@ class NightArbitrator {
       notes: notes,
     );
 
+    // ---- 攝夢 ----
+    // 夢遊者免疫今晚的一切傷害（**連毒都擋**，比守衛強一截），
+    // 但連續兩晚被攝的人會夢死，而夢死**擋不住**。
+    // 必須排在刀、毒、殉情之後：免疫是把已經判定的死亡拿掉。
+    _resolveDream(
+      state: state,
+      actions: actions,
+      deaths: deaths,
+      notes: notes,
+    );
+
     // ---- 開槍資格 ----
     var hunterMayShoot = false;
 
-    // 獵人本人：死因不是毒就能開槍。
+    // 獵人本人：死因不是毒、也不是夢死就能開槍。
+    //
+    // 兩者不可混為一談：「被毒不可開槍」是板子可設定的旗標
+    // （`poisonedHunterCannotShoot`），夢死則是**寫死的規則**，
+    // 不受任何旗標影響。
     final hunterSeat = state.seatOfRole(Roles.hunter.id);
     if (hunterSeat != null && deaths.containsKey(hunterSeat)) {
       final cause = deaths[hunterSeat]!;
-      if (cause == DeathCause.poison && rules.poisonedHunterCannotShoot) {
+      if (cause == DeathCause.dreamDeath) {
+        notes.add('獵人（$hunterSeat 號）夢死，不可開槍');
+      } else if (cause == DeathCause.poison && rules.poisonedHunterCannotShoot) {
         notes.add('獵人（$hunterSeat 號）被毒死，依規則不可開槍');
       } else {
         hunterMayShoot = true;
@@ -170,7 +270,12 @@ class NightArbitrator {
     final seerTarget = actions.seerTarget;
     var seerSawWolf = false;
     if (seerTarget != null) {
-      seerSawWolf = state.playerAt(seerTarget).role?.camp == Camp.wolf;
+      seerSawWolf = apparentCampAt(
+            state,
+            seerTarget,
+            learnTargetTonight: actions.mechanicWolfLearnTarget,
+          ) ==
+          Camp.wolf;
     }
 
     // ---- 通靈師查驗（看到的是真實身分，不只好人／狼人）----
@@ -178,7 +283,11 @@ class NightArbitrator {
     if (actions.psychicTarget != null) {
       psychicResult = PsychicResult(
         seat: actions.psychicTarget!,
-        revealedRole: state.playerAt(actions.psychicTarget!).role,
+        revealedRole: apparentRoleAt(
+          state,
+          actions.psychicTarget!,
+          learnTargetTonight: actions.mechanicWolfLearnTarget,
+        ),
       );
     }
 
@@ -199,14 +308,26 @@ class NightArbitrator {
     final inspect = actions.mechanicInspectTarget;
     if (inspect != null) {
       final learned = state.mechanicWolfLearnedRole;
+      // 機械狼不會查自己（學習對象不能選自己，查驗目標也一樣），
+      // 但仍走同一個判定 —— 偽裝規則只有一份。
+      final seen = apparentRoleAt(
+        state,
+        inspect,
+        learnTargetTonight: actions.mechanicWolfLearnTarget,
+      );
       if (learned?.id == Roles.psychic.id) {
         mechanicPsychicResult = PsychicResult(
           seat: inspect,
-          revealedRole: state.playerAt(inspect).role,
+          revealedRole: seen,
         );
       } else {
         mechanicSeerTarget = inspect;
-        mechanicSeerSawWolf = state.playerAt(inspect).role?.camp == Camp.wolf;
+        mechanicSeerSawWolf = apparentCampAt(
+              state,
+              inspect,
+              learnTargetTonight: actions.mechanicWolfLearnTarget,
+            ) ==
+            Camp.wolf;
       }
     }
 
@@ -230,6 +351,48 @@ class NightArbitrator {
       poisonReflectedTo: reflected,
       shieldBrokenSeats: shieldBroken,
     );
+  }
+
+  /// 攝夢人的結算：夢遊者的免疫、連兩晚的夢死、攝夢人出局的連帶。
+  ///
+  /// **順序很重要**，三件事必須照這個先後做：
+  ///
+  /// 1. **免疫** —— 把夢遊者從死亡名單裡拿掉。連女巫的毒都擋
+  ///    （守衛擋不住毒，攝夢人擋得住，這是他的核心強度）。
+  /// 2. **夢死** —— 與上一晚是同一人就死，而且**擋不住**：免疫剛拿掉的
+  ///    死亡不會救回他，守護與解藥也一樣。所以要排在免疫**之後**寫入。
+  /// 3. **攝夢人出局的連帶** —— 攝夢人今晚死了，當晚的夢遊者一併死亡。
+  ///
+  /// 第 1 與第 2 看似矛盾，其實不是：免疫擋的是**別人造成的**傷害，
+  /// 夢死是被攝這件事本身造成的，不在免疫範圍內。
+  void _resolveDream({
+    required GameState state,
+    required NightActions actions,
+    required Map<int, DeathCause> deaths,
+    required List<String> notes,
+  }) {
+    final dreamer = actions.dreamTarget;
+    if (dreamer == null) return;
+
+    // 1. 免疫：今晚落在夢遊者身上的死亡全部取消。
+    final blocked = deaths.remove(dreamer);
+    if (blocked != null) {
+      notes.add('$dreamer 號在夢遊，免疫今晚的${blocked.labelZh}');
+    }
+
+    // 2. 夢死：連續兩晚被攝。擋不住，所以直接寫進死亡名單。
+    if (dreamer == state.lastDreamTarget) {
+      deaths[dreamer] = DeathCause.dreamDeath;
+      notes.add('$dreamer 號連續兩晚被攝，夢死（擋不住，也不能開槍）');
+      return;
+    }
+
+    // 3. 攝夢人今晚出局 → 當晚的夢遊者一併死亡。
+    final weaver = state.seatOfRole(Roles.dreamWeaver.id);
+    if (weaver != null && deaths.containsKey(weaver)) {
+      deaths[dreamer] = DeathCause.dreamDeath;
+      notes.add('攝夢人（$weaver 號）出局，夢遊中的 $dreamer 號一併死亡');
+    }
   }
 
   /// 狼美人（或學到狼美人的機械狼）今晚出局時，處理殉情。
@@ -379,6 +542,45 @@ class NightArbitrator {
       state.mechanicWolfLearnedNight = actions.night;
     }
 
+    // 被轉換者接下狼刀的那一刻正式「轉換」：同時**喪失尚未使用的原技能**
+    // （擔當 2026-09-22 指定）。在那之前他的神職技能照常能用，
+    // 所以不能一被轉換就標記 —— 要等真的輪到他持刀。
+    final knifeHolder = state.convertedKnifeHolder;
+    if (knifeHolder != null && !state.hasLostSkills(knifeHolder)) {
+      state.convertedActivatedSeats.add(knifeHolder);
+      state.log.add(
+        round: actions.night,
+        isNight: true,
+        kind: LogKind.ruling,
+        text: '$knifeHolder 號（被轉換者）接下狼刀，原本的技能就此失效',
+        seats: [knifeHolder],
+      );
+    }
+
+    // 覺醒石像鬼的轉換：只有首夜會有，寫進去就固定了。
+    //
+    // 兩隻選到同一人時 `gargoyleConvertTargets` 本來就只有一筆 ——
+    // 「只有那一個人轉換進狼隊，另一次白費」（擔當指定）自然成立。
+    if (actions.gargoyleConvertTargets.isNotEmpty &&
+        state.conversionNight == null) {
+      state.convertedSeats.addAll(actions.gargoyleConvertTargets);
+      state.conversionNight = actions.night;
+    }
+
+    // 攝夢人：記住今晚攝的是誰，明晚才判斷得出「連續兩晚」。
+    // **每晚都要更新**，包含沒攝（null）—— 中間斷一晚就不算連續。
+    state.lastDreamTarget = actions.dreamTarget;
+
+    // 暗戀者：首夜選定，**當下的陣營就固定下來**（擔當 2026-09-22 指定）。
+    //
+    // 存陣營而不是每次去讀對象現在站哪邊 —— 對象之後若被轉換成狼，
+    // 暗戀者跟的仍是選的時候那一邊。對象死了也不改。
+    final admired = actions.secretAdmirerTarget;
+    if (admired != null && state.secretAdmirerCamp == null) {
+      state.secretAdmirerTarget = admired;
+      state.secretAdmirerCamp = state.playerAt(admired).role?.camp;
+    }
+
     // 魅惑每晚重設：**沒選就是沒魅惑**，前一晚的對象一併解除。
     // 存進狀態是為了白天用 —— 狼美人若被放逐或被騎士決鬥掉，
     // 殉情的對象就是昨晚指定的那位。
@@ -386,6 +588,9 @@ class NightArbitrator {
     state.mechanicCharmedSeat = actions.mechanicCharmTarget;
 
     for (final d in outcome.deaths) {
+      // 白貓不會當場離場 —— 翻牌之後還能活到下一次放逐投票結束。
+      // 延後期間他算存活，所以連 `alive` 都不動。
+      if (state.deferWhiteCatDeath(d.seat, d.cause)) continue;
       state.playerAt(d.seat).alive = false;
     }
 

@@ -96,6 +96,18 @@ class _GameOverPageState extends State<GameOverPage> {
               ),
             ),
           ),
+
+          // 暗戀者是**個人勝負**，與陣營勝負各算各的 —— 可能出現
+          // 「好人勝，但暗戀者輸」。不另外寫一行的話現場根本看不出來。
+          if (check.secretAdmirerWon != null) ...[
+            const SizedBox(height: 10),
+            _SecretAdmirerCard(
+              won: check.secretAdmirerWon!,
+              admirerSeat: state.seatOfRole(Roles.secretAdmirer.id),
+              targetSeat: state.secretAdmirerTarget,
+            ),
+          ],
+
           const SizedBox(height: 16),
 
           Text(
@@ -204,6 +216,78 @@ class _GameOverPageState extends State<GameOverPage> {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 暗戀者的個人勝負。
+///
+/// 陣營勝負在上面那張大卡，這張只講暗戀者自己 —— 兩者可能相反，
+/// 所以措辭要明確寫出「跟誰一起贏／輸」，不能只寫贏或輸。
+class _SecretAdmirerCard extends StatelessWidget {
+  const _SecretAdmirerCard({
+    required this.won,
+    required this.admirerSeat,
+    required this.targetSeat,
+  });
+
+  final bool won;
+
+  /// 暗戀者本人的座次；本局沒有暗戀者時為 null。
+  final int? admirerSeat;
+
+  /// 首夜選的暗戀對象座次。
+  final int? targetSeat;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = won ? WgmTheme.godColor : scheme.onSurfaceVariant;
+    final who = admirerSeat == null ? '暗戀者' : '暗戀者（$admirerSeat 號）';
+    final target = targetSeat == null ? '沒有指定對象' : '暗戀 $targetSeat 號';
+
+    return Card(
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: color.withValues(alpha: 0.10),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              won ? Icons.favorite_rounded : Icons.heart_broken_rounded,
+              color: color,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    won ? '$who也獲勝' : '$who沒有獲勝',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$target，勝負跟著對象首夜的陣營走',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

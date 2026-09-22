@@ -1,4 +1,5 @@
 import '../models/game_state.dart';
+import '../models/role.dart';
 import '../rules/rule_flags.dart';
 
 /// 勝負結果。
@@ -21,12 +22,26 @@ enum GameResult {
 
 /// 一次勝負檢查的結果。
 class WinCheck {
-  const WinCheck({required this.result, required this.reason});
+  const WinCheck({
+    required this.result,
+    required this.reason,
+    this.secretAdmirerWon,
+  });
 
   final GameResult result;
 
   /// 為什麼是這個結果，例如「神職全滅（屠邊）」。現場有爭議時要講得出依據。
   final String reason;
+
+  /// 暗戀者是否跟著贏。**本局沒有暗戀者、或還沒分出勝負時為 null。**
+  ///
+  /// 暗戀者是目前唯一的**個人勝利條件** —— 他本人永遠算好人（查驗、屠邊人頭
+  /// 都照好人算），但「誰贏」跟著首夜選定的對象走。所以可能出現
+  /// 「好人勝，但暗戀者輸」或「狼人勝，而暗戀者贏」。
+  ///
+  /// 刻意不併進 [result]：陣營勝負與個人勝負是兩回事，混在一起會讓
+  /// 既有的屠邊／屠城判定失去意義。
+  final bool? secretAdmirerWon;
 
   bool get isOver => result.isOver;
 
@@ -47,7 +62,32 @@ class WinCheck {
 ///
 /// 目前內建的六個板子**都是屠邊**。
 abstract final class WinChecker {
-  static WinCheck check(GameState state) {
+  static WinCheck check(GameState state) => _withSecretAdmirer(
+        state,
+        _checkCamps(state),
+      );
+
+  /// 把暗戀者的個人勝負補進陣營判定的結果。
+  ///
+  /// 分成兩層是刻意的：[_checkCamps] 完全不必知道暗戀者的存在，
+  /// 屠邊／屠城的邏輯維持原樣。
+  static WinCheck _withSecretAdmirer(GameState state, WinCheck check) {
+    if (!check.isOver) return check;
+
+    final camp = state.secretAdmirerCamp;
+    // 本局沒有暗戀者，或暗戀者沒選對象（首夜就出局之類）—— 沒有個人勝負可算。
+    if (camp == null) return check;
+
+    final winners =
+        check.result == GameResult.goodWin ? Camp.good : Camp.wolf;
+    return WinCheck(
+      result: check.result,
+      reason: check.reason,
+      secretAdmirerWon: camp == winners,
+    );
+  }
+
+  static WinCheck _checkCamps(GameState state) {
     // 狼人全滅 → 好人勝，兩種賽制都一樣。
     if (state.aliveWolfCount == 0) {
       return const WinCheck(result: GameResult.goodWin, reason: '狼人全數出局');

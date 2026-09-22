@@ -1,4 +1,5 @@
 import '../models/game_state.dart';
+import '../models/log_entry.dart';
 import '../models/night_action.dart';
 import '../models/role.dart';
 import 'night_arbitrator.dart';
@@ -38,8 +39,21 @@ enum NightSub {
   /// 獵人：法官給「可否開槍」的手勢。
   hunterGesture,
 
+  /// 熊：法官給「咆哮／不咆哮」—— 兩側鄰座裡有沒有狼。
+  bearGrowl,
+
+  /// 覺醒石像鬼轉換相鄰座次的一位。**逐隻問過去**，一隻一次。
+  gargoyleConvert,
+
   /// 夜晚結尾：法官告知機械狼學到的身分，並給開槍手勢。
   mechanicReveal,
+
+  /// 查驗結果：法官**當場**把金水／查殺（通靈師則是真實身分）比給查驗者看。
+  ///
+  /// 非有不可 —— 查驗者只有這一刻是睜著眼的。夜晚結算頁固然也會列出結果，
+  /// 但那是整夜跑完之後的事，那時查驗者早就閉眼了，法官已經沒機會告知。
+  /// 這一步之於預言家，等同 [hunterGesture] 之於獵人。
+  inspectResult,
 
   /// 走過場：這一步的角色已全部出局，但仍要照常喊一次再閉眼。
   ///
@@ -63,8 +77,52 @@ enum SeatBlockReason {
   /// 機械狼不能學自己。
   mechanicSelfLearn,
 
+  /// 暗戀者不能暗戀自己。
+  secretAdmirerSelf,
+
+  /// 白貓已翻牌、正在延後離場中 —— 這段期間禁止成為技能目標。
+  whiteCatPending,
+
   /// 本局不可同夜雙藥。
   witchDualUse,
+}
+
+/// [NightSub.inspectResult] 那一頁的內容：法官要比給查驗者看的答案。
+///
+/// 只帶資料，不帶措辭 —— 「金水」「查殺」怎麼寫是 UI 的事。
+class InspectReveal {
+  const InspectReveal({
+    required this.seat,
+    required this.isPsychic,
+    required this.role,
+    required this.sawWolf,
+    required this.byMechanicWolf,
+  });
+
+  /// 被查驗的座次。
+  final int seat;
+
+  /// 通靈師（看真實身分）還是預言家（只分好人／狼人）。
+  final bool isPsychic;
+
+  /// 查驗者**看到的**身分，不一定是真身 —— 機械狼學過之後看到的是
+  /// 牠學到的身分（見 `NightArbitrator.apparentRoleAt`）。
+  ///
+  /// **尚未登記時為 null** —— 首夜邊問邊登記的用法下，排在查驗者
+  /// 後面的角色這時還沒登記。
+  final Role? role;
+
+  /// 這次查驗是機械狼用學來的技能做的。
+  final bool byMechanicWolf;
+
+  /// 預言家的答案：查殺為 true，金水為 false。
+  ///
+  /// **不是從 [role] 推出來的** —— 被轉換者身上兩者會不一致：
+  /// 預言家看到查殺，通靈師看到的卻是他原本的身分（例如女巫）。
+  /// 所以由引擎分別算好再帶進來，見 `NightArbitrator.apparentCampAt`。
+  ///
+  /// 身分尚未登記時視為好人 —— 夜晚結算會把剩下的座次補成平民。
+  final bool sawWolf;
 }
 
 /// 夜晚流程走到哪裡 —— 撤銷時要連這個一起還原。
@@ -76,6 +134,7 @@ class NightCursor {
     required this.stepIndex,
     required this.sub,
     required this.specialIndex,
+    required this.gargoyleIndex,
     required this.picked,
     required this.actions,
   });
@@ -83,6 +142,7 @@ class NightCursor {
   final int stepIndex;
   final NightSub sub;
   final int specialIndex;
+  final int gargoyleIndex;
   final Set<int> picked;
   final NightActions actions;
 }
@@ -104,6 +164,11 @@ class NightFlowMachine {
             ? NightFlow.firstNightSteps(state.preset)
             : NightFlow.laterNightStepsFor(state, night: night),
         actions = NightActions(night: night) {
+    // 開頭若正好是沒事可做的步驟就先跳過（見 [_isNoOpStep]）。
+    // 實務上第一步一定是狼隊或守衛，這個迴圈只是防呆。
+    while (_stepIndex + 1 < steps.length && _isNoOpStep(steps[_stepIndex])) {
+      _stepIndex++;
+    }
     _sub = _initialSubFor(step);
   }
 
@@ -128,6 +193,7 @@ class NightFlowMachine {
   int _stepIndex = 0;
   late NightSub _sub;
   int _specialIndex = 0;
+  int _gargoyleIndex = 0;
   final Set<int> _picked = {};
 
   /// 結算結果；[finished] 為 true 之前是 null。
@@ -189,16 +255,171 @@ class NightFlowMachine {
       if (s.skill == NightSkill.wolfKill && hasExtraKnife) {
         return NightSub.secondKnife;
       }
+      // 石像鬼全滅、機械狼也出局，而且只剩一位被轉換者 →
+      // 狼刀移交給他（開刀順位第 3 順位）。狼隊這一格照樣是開刀那一步，
+      // 只是持刀的人換了。
+      if (s.skill == NightSkill.wolfKill && convertedTakesKnife) {
+        return NightSub.chooseTarget;
+      }
       return NightSub.passThrough;
     }
-    if (isFirstNight && s.seatCount > 0) return NightSub.registerSeats;
+    if (isFirstNight && needsRegistration(s)) return NightSub.registerSeats;
     return _skillSubFor(s);
   }
+
+  /// 首夜這一步還需不需要登記座次。
+  ///
+  /// 法官有兩種用法，兩種都要能跑：
+  ///
+  /// 1. **夜裡邊問邊登記** —— 登記頁只確認人數就開局，首夜依夜晚順序
+  ///    「守衛請睜眼，你是幾號」逐一問出來。
+  /// 2. **開局前就配好** —— 登記頁把 12 個身分全部指定好（`隨機發牌`
+  ///    或手動點完）再進第一夜。這時身分**已經都在 [GameState] 裡了**，
+  ///    沒有東西可登記。
+  ///
+  /// 第 2 種以前會整個卡死：這一步照樣進登記子階段，但可選座次取的是
+  /// 「尚未登記身分的座次」＝空集合，[canProceed] 永遠是 false，
+  /// 下一步鍵變灰，法官過不了第一夜。角色照樣要喊、技能照樣要收，
+  /// **只是不必再問一次座次**。
+  bool needsRegistration(NightStep s) {
+    if (s.seatCount == 0) return false;
+    final assigned = s.roles.fold<int>(
+      0,
+      (n, r) => n + state.seatsOfRole(r.id).length,
+    );
+    return assigned < s.seatCount;
+  }
+
+  static bool _isInspectSkill(NightSkill skill) =>
+      skill == NightSkill.seerInspect || skill == NightSkill.psychicInspect;
+
+  /// [NightSub.inspectResult] 這一頁要給法官看的東西。
+  ///
+  /// 不在這一頁時回傳 null。
+  InspectReveal? get inspectReveal {
+    if (_sub != NightSub.inspectResult) return null;
+    final seat = _inspectedSeat;
+    if (seat == null) return null;
+    return InspectReveal(
+      seat: seat,
+      // 通靈師看到的是真實身分；預言家只分好人／狼人。
+      isPsychic: effectiveSkill == NightSkill.psychicInspect,
+      // 機械狼學過就顯示牠學到的身分（連本夜剛學的也算）——
+      // 與結算共用 `NightArbitrator.apparentRoleAt`，兩邊不會給出不同答案。
+      role: NightArbitrator.apparentRoleAt(
+        state,
+        seat,
+        learnTargetTonight: actions.mechanicWolfLearnTarget,
+      ),
+      // 陣營另外算 —— 被轉換者的身分與陣營會給出不同答案。
+      sawWolf: NightArbitrator.apparentCampAt(
+            state,
+            seat,
+            learnTargetTonight: actions.mechanicWolfLearnTarget,
+          ) ==
+          Camp.wolf,
+      byMechanicWolf: step.byMechanicWolf,
+    );
+  }
+
+  /// 把熊今晚的咆哮記進復盤日誌。
+  ///
+  /// 咆哮不動局面，所以不經過結算器的 `_writeLog()` —— 但它是法官給出去的
+  /// **情報**，事後對帳一定要看得到，所以在給完手勢的當下就寫。
+  void _logBearGrowl() {
+    final neighbours = bearNeighbors;
+    if (neighbours.isEmpty) return;
+    state.log.add(
+      round: night,
+      isNight: true,
+      kind: LogKind.info,
+      text: '熊的鄰座是 ${neighbours.join("、")} 號，'
+          '${bearGrowls ? "咆哮（有狼）" : "不咆哮（沒有狼）"}',
+      seats: neighbours,
+    );
+  }
+
+  // ---- 覺醒石像鬼的轉換 ----
+
+  /// 場上的覺醒石像鬼座次，依座號排序。
+  List<int> get gargoyleSeats =>
+      state.seatsOfRole(Roles.awakenedGargoyle.id)..sort();
+
+  /// 目前輪到哪一隻石像鬼轉換；不在那一步時為 null。
+  int? get currentGargoyleSeat {
+    if (_sub != NightSub.gargoyleConvert) return null;
+    final seats = gargoyleSeats;
+    return _gargoyleIndex < seats.length ? seats[_gargoyleIndex] : null;
+  }
+
+  /// 目前這隻石像鬼可以轉換的對象 —— **只有牠的左右鄰座**。
+  ///
+  /// 座次是環狀的，鄰座取的是最近的兩位存活玩家（與熊同一套走訪）。
+  /// 另一隻石像鬼若剛好是鄰座也照樣列出來 —— 規則沒禁止，
+  /// 只是轉換自己人沒有意義，由法官自己決定。
+  Set<int> get gargoyleNeighbors {
+    final seat = currentGargoyleSeat;
+    if (seat == null) return const {};
+    final seats = <int>{};
+    for (final clockwise in [false, true]) {
+      final n = state.nextAliveSeat(seat, clockwise: clockwise);
+      if (n != null && n != seat) seats.add(n);
+    }
+    return seats;
+  }
+
+  /// 這一夜到目前為止已經轉換成功的座次。
+  Set<int> get convertedTonight => actions.gargoyleConvertTargets;
+
+  /// 今晚的狼刀是否已經移交給被轉換者（開刀順位第 3 順位）。
+  bool get convertedTakesKnife => state.convertedKnifeHolder != null;
+
+  /// 今晚實際持刀的被轉換者；沒有就是 null。
+  int? get convertedKnifeHolder => state.convertedKnifeHolder;
+
+  /// 正在延後離場中的白貓座次；沒有就是 null。
+  int? get _whiteCatPendingSeat {
+    final seat = state.seatOfRole(Roles.whiteCat.id);
+    if (seat == null) return null;
+    return state.isWhiteCatPending(seat) ? seat : null;
+  }
+
+  /// 熊今晚兩側的鄰座 —— 鄰座死亡會往外順延，所以每晚重算。
+  List<int> get bearNeighbors => NightArbitrator.bearNeighbors(state);
+
+  /// 熊今晚會不會咆哮。
+  bool get bearGrowls => NightArbitrator.bearGrowls(state);
+
+  /// 剛剛查驗的座次 —— 目標已經寫進 [actions]，從那裡取回來。
+  int? get _inspectedSeat {
+    if (step.byMechanicWolf) return actions.mechanicInspectTarget;
+    return effectiveSkill == NightSkill.psychicInspect
+        ? actions.psychicTarget
+        : actions.seerTarget;
+  }
+
+  /// 這一步完全沒有事要做，該整個跳過。
+  ///
+  /// 白痴、騎士這類角色**沒有夜間技能**，首夜那一步存在的唯一目的就是
+  /// 問出座次。法官若在登記頁就把身分配好了，座次已知，這一步就沒有
+  /// 任何內容 —— 既沒得登記，也沒有技能可收。
+  ///
+  /// 跳掉不會洩漏資訊：第二夜起本來就不會再叫這些角色
+  /// （[NightFlow.laterNightSteps] 不含他們），所以每一夜的流程長度一致。
+  ///
+  /// 走過場的步驟不算在內 —— 那是「角色死光了仍要照喊」，刻意要保留的。
+  bool _isNoOpStep(NightStep s) =>
+      isFirstNight &&
+      !isPassThrough(s) &&
+      s.skill == NightSkill.none &&
+      !needsRegistration(s);
 
   /// 登記完成後（或本來就不用登記時），該步驟要進入的技能子階段。
   NightSub _skillSubFor(NightStep s) => switch (s.skill) {
         NightSkill.witchPotion => NightSub.witchPotion,
         NightSkill.hunterGesture => NightSub.hunterGesture,
+        NightSkill.bearGrowl => NightSub.bearGrowl,
+        NightSkill.gargoyleConvert => NightSub.gargoyleConvert,
         NightSkill.mechanicReveal => NightSub.mechanicReveal,
         // 機械狼那一輪永遠從開刀手勢開始。
         NightSkill.mechanicTurn => NightSub.mechanicKnifeGesture,
@@ -218,8 +439,10 @@ class NightFlowMachine {
         NightSub.registerSeats => step.seatCount,
         NightSub.pickSpecial => 1,
         NightSub.hunterGesture ||
+        NightSub.bearGrowl ||
         NightSub.mechanicReveal ||
         NightSub.mechanicKnifeGesture ||
+        NightSub.inspectResult ||
         NightSub.passThrough =>
           0,
         // 女巫那一頁選的是毒藥目標；解藥另外用按鈕挑。
@@ -290,10 +513,15 @@ class NightFlowMachine {
   Set<int>? get selectableSeats {
     switch (_sub) {
       case NightSub.hunterGesture:
+      case NightSub.bearGrowl:
       case NightSub.mechanicKnifeGesture:
       case NightSub.mechanicReveal:
+      case NightSub.inspectResult:
       case NightSub.passThrough:
         return const {};
+      case NightSub.gargoyleConvert:
+        // 只能轉換自己的左右鄰座。
+        return gargoyleNeighbors;
       case NightSub.registerSeats:
         return _unassignedSeats;
       case NightSub.pickSpecial:
@@ -315,6 +543,11 @@ class NightFlowMachine {
 
   /// 不可選的座次與原因。null 表示沒有額外限制。
   Map<int, SeatBlockReason>? get blockedSeats {
+    // 白貓翻牌後到正式離場之間**禁止成為任何技能的目標**
+    // （擔當 2026-09-22 指定）。擋在輸入階段，不是收完再判定無效 ——
+    // 這也順便免掉「延後期間又被殺一次」該怎麼結算的問題。
+    final pendingCat = _whiteCatPendingSeat;
+
     if (_sub == NightSub.witchPotion) {
       // 已經下了解藥、而本局不可同夜雙藥 → 毒藥整排都不能選。
       if (!poisonUsable && healTarget != null) {
@@ -322,9 +555,18 @@ class NightFlowMachine {
           for (final p in state.players) p.seat: SeatBlockReason.witchDualUse,
         };
       }
+      if (pendingCat != null) {
+        return {pendingCat: SeatBlockReason.whiteCatPending};
+      }
       return null;
     }
     if (_sub != NightSub.chooseTarget) return null;
+
+    // 各角色自己的限制只擋一個人，白貓這條是**所有技能都適用**，
+    // 所以擺在最前面；兩者同時成立時以白貓優先（反正都是不能選）。
+    if (pendingCat != null) {
+      return {pendingCat: SeatBlockReason.whiteCatPending};
+    }
 
     switch (effectiveSkill) {
       case NightSkill.guardProtect:
@@ -348,8 +590,29 @@ class NightFlowMachine {
         // 學習對象是別人 —— 學自己沒有意義。
         final self = state.seatOfRole(Roles.mechanicWolf.id);
         if (self != null) return {self: SeatBlockReason.mechanicSelfLearn};
+      case NightSkill.secretAdmire:
+        // 暗戀自己等於沒有勝負條件，擋掉。
+        final self = state.seatOfRole(Roles.secretAdmirer.id);
+        if (self != null) return {self: SeatBlockReason.secretAdmirerSelf};
       default:
         return null;
+    }
+    return null;
+  }
+
+  /// 反查某個原因擋住了哪一個座次；該限制目前未生效時回傳 null。
+  ///
+  /// 給 UI 寫提示文案用 —— 「昨晚守了 N 號」這種句子需要知道號碼，
+  /// 但**不該讓頁面自己去讀規則旗標再算一次**。旗標的判斷只做在
+  /// [blockedSeats] 一處，這裡只是換個角度取同一份結果。
+  ///
+  /// 只適用於單一座次的限制（連守、連魅惑、自刀、學自己）。
+  /// [SeatBlockReason.witchDualUse] 擋的是整排，不該用這個查。
+  int? blockedSeatFor(SeatBlockReason reason) {
+    final blocked = blockedSeats;
+    if (blocked == null) return null;
+    for (final entry in blocked.entries) {
+      if (entry.value == reason) return entry.key;
     }
     return null;
   }
@@ -432,6 +695,7 @@ class NightFlowMachine {
         stepIndex: _stepIndex,
         sub: _sub,
         specialIndex: _specialIndex,
+        gargoyleIndex: _gargoyleIndex,
         picked: {..._picked},
         actions: actions.copy(),
       );
@@ -448,6 +712,7 @@ class NightFlowMachine {
     _stepIndex = cursor.stepIndex;
     _sub = cursor.sub;
     _specialIndex = cursor.specialIndex;
+    _gargoyleIndex = cursor.gargoyleIndex;
     _picked
       ..clear()
       ..addAll(cursor.picked);
@@ -484,8 +749,19 @@ class NightFlowMachine {
         }
 
       case NightSub.chooseTarget:
+        final wasInspect = _isInspectSkill(effectiveSkill);
+        final inspected = _picked.isNotEmpty;
         _commitTarget();
         _picked.clear();
+        // 查驗完不直接跳下一步 —— 先停在結果那一頁，讓法官比給查驗者看。
+        // 空驗（沒選人）就沒有結果可給，照常往下走。
+        if (wasInspect && inspected) {
+          _sub = NightSub.inspectResult;
+        } else {
+          _advanceStep();
+        }
+
+      case NightSub.inspectResult:
         _advanceStep();
 
       case NightSub.mechanicKnifeGesture:
@@ -517,6 +793,27 @@ class NightFlowMachine {
           actions.witchPoisonTarget = poison;
         }
         _picked.clear();
+        _advanceStep();
+
+      case NightSub.gargoyleConvert:
+        // 收下這一隻的轉換對象，再問下一隻。
+        //
+        // 存進 **Set**：兩隻選到同一人時只會有一位轉換進狼隊
+        //（擔當指定，另一次白費），Set 天生就是這個語意。
+        if (_picked.isNotEmpty) {
+          actions.gargoyleConvertTargets.add(_picked.first);
+        }
+        _picked.clear();
+        if (_gargoyleIndex + 1 < gargoyleSeats.length) {
+          _gargoyleIndex++;
+        } else {
+          _advanceStep();
+        }
+
+      case NightSub.bearGrowl:
+        // 咆哮是**資訊**，不動任何狀態，但要進復盤 ——
+        // 事後對帳時得看得出當晚給的是哪個答案。
+        _logBearGrowl();
         _advanceStep();
 
       case NightSub.hunterGesture:
@@ -590,8 +887,16 @@ class NightFlowMachine {
         }
       case NightSkill.mechanicLearn:
         actions.mechanicWolfLearnTarget = target;
+      case NightSkill.secretAdmire:
+        actions.secretAdmirerTarget = target;
+      case NightSkill.dreamWeave:
+        actions.dreamTarget = target;
+      case NightSkill.gargoyleConvert:
+        // 轉換在 `next()` 裡逐隻收，這裡不處理。
+        break;
       case NightSkill.witchPotion:
       case NightSkill.hunterGesture:
+      case NightSkill.bearGrowl:
       case NightSkill.mechanicReveal:
       case NightSkill.mechanicTurn:
       case NightSkill.none:
@@ -600,13 +905,18 @@ class NightFlowMachine {
   }
 
   void _advanceStep() {
-    final next = _stepIndex + 1;
+    // 沒事可做的步驟一路跳過（見 [_isNoOpStep]）；全部跳完就結算。
+    var next = _stepIndex + 1;
+    while (next < steps.length && _isNoOpStep(steps[next])) {
+      next++;
+    }
     if (next >= steps.length) {
       _finish();
       return;
     }
     _stepIndex = next;
     _specialIndex = 0;
+    _gargoyleIndex = 0;
     _sub = _initialSubFor(step);
   }
 

@@ -22,6 +22,11 @@ enum ExileStage {
   /// 被放逐者是槍牌 → 選一個帶走。
   shoot,
 
+  /// 被放逐的是河豚 → 問他要不要翻牌帶走投他的人。
+  ///
+  /// **主動技能**，法官要問過本人；不發動就直接結束。
+  pufferfishReveal,
+
   /// 結束。
   done,
 }
@@ -152,7 +157,7 @@ class ExileVote {
     } else {
       _note('$shooter 號放棄開槍');
     }
-    stage = ExileStage.done;
+    _finishStage();
   }
 
   /// 前進：投票階段會算票並跑完放逐連鎖。
@@ -169,6 +174,9 @@ class ExileVote {
       case ExileStage.shoot:
         // 用 shoot() 結束，next() 視為放棄開槍。
         shoot(null);
+      case ExileStage.pufferfishReveal:
+        // 同上 —— next() 視為不發動。要帶走人得明確按翻牌。
+        revealPufferfish(activate: false);
       case ExileStage.done:
         break;
     }
@@ -224,7 +232,7 @@ class ExileVote {
 
     if (highest == 0) {
       _note('全員棄票，無人出局');
-      stage = ExileStage.done;
+      _finishStage();
       return;
     }
 
@@ -243,12 +251,12 @@ class ExileVote {
     switch (state.preset.rules.tieBreak) {
       case TieBreak.none:
         _note('${tie.join('、')} 號平票，依本局規則直接無人出局');
-        stage = ExileStage.done;
+        _finishStage();
       case TieBreak.pkThenNone:
       case TieBreak.pkThenRevote:
         if (isRunoff) {
           _note('PK 後仍然平票，無人出局');
-          stage = ExileStage.done;
+          _finishStage();
           return;
         }
         runoffTargets
@@ -272,7 +280,7 @@ class ExileVote {
       state.playerAt(seat).canVote = false;
       state.playerAt(seat).infoTags.add(InfoTag.silenced);
       _note('$seat 號是白痴，翻牌不死，失去投票權但留在場上');
-      stage = ExileStage.done;
+      _finishStage();
       return;
     }
 
@@ -289,7 +297,63 @@ class ExileVote {
       return;
     }
 
-    stage = ExileStage.done;
+    // 河豚被放逐 → 問他要不要翻牌帶走投他的人。
+    // 只有河豚**自己被放逐**時才有這一步（擔當 2026-09-23 指定）。
+    if (role?.id == Roles.pufferfish.id) {
+      if (pufferfishVoters.isEmpty) {
+        _note('河豚（$seat 號）被放逐，但沒有人投他，技能無從發動');
+      } else {
+        _note('河豚（$seat 號）被放逐，可以翻牌帶走投他的人');
+        stage = ExileStage.pufferfishReveal;
+        return;
+      }
+    }
+
+    _finishStage();
+  }
+
+  /// 這一輪投給河豚的人 —— 也就是翻牌會帶走的名單。
+  ///
+  /// 取的是**被放逐的那一次**投票紀錄：平票 PK 時 [votes] 已經在重投前清空，
+  /// 所以這裡拿到的正是決定放逐的那一輪，符合「投給河豚的玩家」。
+  ///
+  /// 河豚自己不在名單裡（投自己也不算），死者也排除掉 —— 連鎖前面的
+  /// 殉情可能已經帶走某些人。
+  Set<int> get pufferfishVoters {
+    final seat = exiledSeat;
+    if (seat == null) return const {};
+    if (state.playerAt(seat).role?.id != Roles.pufferfish.id) return const {};
+    return votes.entries
+        .where((e) => e.value == seat && e.key != seat)
+        .map((e) => e.key)
+        .where((voter) => state.playerAt(voter).alive)
+        .toSet();
+  }
+
+  /// 河豚翻牌，帶走所有投他的人。
+  ///
+  /// 被帶走的人**不能開槍**（擔當 2026-09-23 指定）—— 死因是
+  /// [DeathCause.pufferfishRevenge]，不在「可以開槍的死法」裡，
+  /// 所以這裡不會進入 [ExileStage.shoot]。
+  void revealPufferfish({required bool activate}) {
+    if (stage != ExileStage.pufferfishReveal) return;
+
+    undoStack.push(state, '河豚翻牌', cursor: _cursor);
+
+    if (!activate) {
+      _note('河豚放棄翻牌，沒有人被帶走');
+      _finishStage();
+      return;
+    }
+
+    final taken = pufferfishVoters.toList()..sort();
+    for (final voter in taken) {
+      _kill(voter, DeathCause.pufferfishRevenge);
+      // 帶走的若是狼美人，殉情照樣成立 —— 只有騎士決鬥有免疫的例外。
+      _resolveCharmSuicide(voter);
+    }
+    _note('河豚翻牌，帶走投他的 ${taken.join("、")} 號');
+    _finishStage();
   }
 
   /// [seat] 若是狼美人，處理殉情。
@@ -306,11 +370,36 @@ class ExileVote {
   }
 
   void _kill(int seat, DeathCause cause) {
-    state.playerAt(seat).alive = false;
     state.playerAt(seat).nightFacts.add(
           cause == DeathCause.exile ? FactTag.exiled : FactTag.shot,
         );
     deaths.add(Death(seat: seat, cause: cause));
+
+    // 白貓翻牌但不當場離場 —— 白天被判死的話要到**隔天**的放逐投票
+    // 結束才真正出局，這段期間他照樣有票、照樣算活著。
+    if (state.deferWhiteCatDeath(seat, cause)) {
+      _note('白貓（$seat 號）翻牌，但要到隔天的放逐投票結束才真正出局');
+      return;
+    }
+    state.playerAt(seat).alive = false;
+  }
+
+  /// 放逐投票結束時結清白貓延後的死亡。
+  ///
+  /// 所有走到 [ExileStage.done] 的路徑都要經過這裡 —— 漏掉一條，
+  /// 白貓就會永遠不死。
+  void _finishStage() {
+    stage = ExileStage.done;
+
+    if (!state.whiteCatDeathIsDue) return;
+    final seat = state.seatOfRole(Roles.whiteCat.id);
+    final cause = state.whiteCatPendingCause;
+    if (seat == null || cause == null) return;
+    if (!state.playerAt(seat).alive) return;
+
+    state.playerAt(seat).alive = false;
+    deaths.add(Death(seat: seat, cause: cause));
+    _note('白貓（$seat 號）延後的離場生效，正式出局（死因：${cause.labelZh}）');
   }
 
   // ---- 撤銷 ----

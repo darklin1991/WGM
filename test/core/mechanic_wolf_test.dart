@@ -546,7 +546,7 @@ void main() {
   });
 
   group('通靈師查驗', () {
-    test('查到的是真實身分，不只好人／狼人', () {
+    test('機械狼還沒學習時，查到的是機械狼本人', () {
       final s = _state();
       final a = NightActions(night: 1)..psychicTarget = 4;
       final o = _arb.settle(s, a);
@@ -562,6 +562,73 @@ void main() {
 
       expect(_arb.settle(s, a).psychicResult?.revealedRole?.id,
           Roles.villager.id);
+    });
+  });
+
+  // 擔當 2026-09-19 指定：機械狼學過之後，查驗看到的是**牠學到的身分**；
+  // **學習當晚就生效**（技能仍隔夜生效），而且**預言家也一起被騙過**。
+  group('機械狼的身分偽裝', () {
+    test('學習當晚，通靈師查到的就是學到的身分', () {
+      final s = _state();
+      // 機械狼（4 號）學 8 號守衛，同一夜通靈師查 4 號。
+      final a = NightActions(night: 1)
+        ..mechanicWolfLearnTarget = 8
+        ..psychicTarget = 4;
+      final o = _arb.settle(s, a);
+
+      expect(o.psychicResult?.revealedRole?.id, Roles.guard.id);
+      expect(s.mechanicWolfLearnedRole, isNull,
+          reason: '這正是重點：局面還沒寫入，偽裝就已經成立');
+    });
+
+    test('隔夜查驗同樣顯示學到的身分', () {
+      final s = _state()
+        ..mechanicWolfLearnedRole = Roles.guard
+        ..mechanicWolfLearnedNight = 1;
+      final a = NightActions(night: 2)..psychicTarget = 4;
+
+      expect(_arb.settle(s, a).psychicResult?.revealedRole?.id, Roles.guard.id);
+    });
+
+    test('預言家也被騙過 —— 學到好人身分就給金水', () {
+      final s = _state();
+      final a = NightActions(night: 1)
+        ..mechanicWolfLearnTarget = 8
+        ..seerTarget = 4;
+
+      expect(_arb.settle(s, a).seerSawWolf, isFalse,
+          reason: '學到守衛，預言家查機械狼得到金水');
+    });
+
+    test('學到狼人仍然是查殺', () {
+      final s = _state();
+      final a = NightActions(night: 1)
+        ..mechanicWolfLearnTarget = 1
+        ..seerTarget = 4;
+
+      expect(_arb.settle(s, a).seerSawWolf, isTrue);
+    });
+
+    test('偽裝只罩機械狼自己 —— 查別人照實回報', () {
+      final s = _state();
+      final a = NightActions(night: 1)
+        ..mechanicWolfLearnTarget = 8
+        ..psychicTarget = 8;
+
+      expect(_arb.settle(s, a).psychicResult?.revealedRole?.id, Roles.guard.id,
+          reason: '被學習的守衛本人不受影響');
+    });
+
+    test('學習對象的身分還沒登記時，沒得偽裝，照實顯示機械狼', () {
+      // 首夜邊問邊登記的用法：機械狼第一個睜眼，被學的人可能還沒登記。
+      final s = _state();
+      s.playerAt(8).role = null;
+      final a = NightActions(night: 1)
+        ..mechanicWolfLearnTarget = 8
+        ..psychicTarget = 4;
+
+      expect(_arb.settle(s, a).psychicResult?.revealedRole?.id,
+          Roles.mechanicWolf.id);
     });
   });
 

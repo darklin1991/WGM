@@ -221,7 +221,12 @@ void main() {
       m.next(); // 狼刀
       m.next(); // 女巫（解藥＋毒藥同一頁）
       m.toggleSeat(1);
-      m.next(); // 預言家 → 獵人手勢
+      m.next(); // 預言家查 1 → 查驗結果
+      expect(m.sub, NightSub.inspectResult, reason: '結果要當場比給預言家看');
+      expect(m.requiredPickCount, 0);
+      m.toggleSeat(9);
+      expect(m.picked, isEmpty, reason: '結果那一頁不能選人');
+      m.next(); // 查驗結果 → 獵人手勢
 
       expect(m.sub, NightSub.hunterGesture);
       expect(m.requiredPickCount, 0);
@@ -279,6 +284,7 @@ void main() {
       m.next(); // 女巫兩瓶藥都不用
       m.toggleSeat(1);
       m.next(); // 預言家查 1
+      m.next(); // 查驗結果比給預言家看
       m.next(); // 獵人手勢 → 結算
 
       expect(m.finished, isTrue);

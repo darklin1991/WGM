@@ -43,6 +43,21 @@ class NightActions {
   /// 機械狼本晚要學習誰的身分技能。整局限一次，隔夜起生效。
   int? mechanicWolfLearnTarget;
 
+  /// 暗戀者指定的暗戀對象。**只有首夜會有值** —— 之後不再叫起來。
+  int? secretAdmirerTarget;
+
+  /// 攝夢人本晚指定的夢遊者。
+  ///
+  /// 夢遊者免疫本夜的一切傷害；**與上一晚是同一人時會夢死**。
+  int? dreamTarget;
+
+  /// 覺醒石像鬼首夜轉換的對象。
+  ///
+  /// 兩隻各選一位，但**兩隻選到同一人時只算一位**（擔當 2026-09-22 指定：
+  /// 就只有那一個人轉換進狼隊，另一次白費），所以用 Set 而不是 List ——
+  /// 型別本身就表達了規則。
+  final Set<int> gargoyleConvertTargets = {};
+
   // ---- 機械狼學到技能後的行動 ----
   //
   // 機械狼學到的技能與原角色**各自獨立**（例如原守衛與機械狼可以守不同人、
@@ -77,6 +92,9 @@ class NightActions {
     ..psychicTarget = psychicTarget
     ..wolfBeautyCharmTarget = wolfBeautyCharmTarget
     ..mechanicWolfLearnTarget = mechanicWolfLearnTarget
+    ..secretAdmirerTarget = secretAdmirerTarget
+    ..dreamTarget = dreamTarget
+    ..gargoyleConvertTargets.addAll(gargoyleConvertTargets)
     ..mechanicGuardTarget = mechanicGuardTarget
     ..mechanicInspectTarget = mechanicInspectTarget
     ..mechanicPoisonTarget = mechanicPoisonTarget
@@ -95,7 +113,22 @@ enum DeathCause {
   loveSuicide('殉情'),
 
   /// 騎士決鬥致死（決鬥到狼，或騎士決鬥到好人而自刎）。
-  knightDuel('騎士決鬥');
+  knightDuel('騎士決鬥'),
+
+  /// 夢死：連續兩晚被攝夢人攝到。
+  ///
+  /// **擋不住**（守護、解藥、夢遊本身的免疫都無效），
+  /// 而且**獵人不能開槍**（擔當 2026-09-22 指定）。
+  ///
+  /// 刻意不沿用毒死：兩者雖然都不能開槍，但宣告與復盤的措辭不同，
+  /// 而且「毒死不能開槍」是可設定的旗標，夢死則是寫死的規則。
+  dreamDeath('夢死'),
+
+  /// 河豚翻牌帶走 —— 河豚被放逐時，這一輪投他的人一併出局。
+  ///
+  /// 刻意不併進放逐或開槍：被帶走的人**不能開槍**（擔當 2026-09-23 指定），
+  /// 所以死因必須和「可以開槍的死法」區分開來，與騎士決鬥同理。
+  pufferfishRevenge('河豚帶走');
 
   const DeathCause(this.labelZh);
 

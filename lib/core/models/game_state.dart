@@ -1,4 +1,5 @@
 import '../log/game_log.dart';
+import 'night_action.dart';
 import 'player.dart';
 import 'preset.dart';
 import 'role.dart';
@@ -55,6 +56,12 @@ class GameState {
     required this.mechanicCharmedSeat,
     required this.lastMechanicCharmTarget,
     required this.knightDuelUsed,
+    required this.conversionNight,
+    required this.whiteCatPendingCause,
+    required this.whiteCatDeathDueAfterDay,
+    required this.lastDreamTarget,
+    required this.secretAdmirerTarget,
+    required this.secretAdmirerCamp,
     required this.log,
   });
 
@@ -123,6 +130,135 @@ class GameState {
   /// 所以決鬥完就算活下來也不能再發動。
   bool knightDuelUsed = false;
 
+  // ---- 覺醒石像鬼的轉換 ----
+
+  /// 首夜被覺醒石像鬼轉換進狼隊的座次。
+  ///
+  /// 兩隻石像鬼轉換到同一個人時只會有一位（擔當 2026-09-22 指定：
+  /// 就只有那一個人轉換進狼隊，另一次白費），所以這裡是 **Set**。
+  final Set<int> convertedSeats = {};
+
+  /// 轉換發生在第幾夜（一定是 1）。查驗的首夜延遲要用它。
+  int? conversionNight;
+
+  /// 已經「轉換」（接下狼刀）的被轉換者。
+  ///
+  /// 轉換發生在**接刀那一刻** —— 石像鬼與機械狼都出局、而且只剩這一位
+  /// 被轉換者時。同時**喪失尚未使用的原技能**，所以要記下來。
+  final Set<int> convertedActivatedSeats = {};
+
+  /// [seat] 是不是被轉換者。
+  bool isConverted(int seat) => convertedSeats.contains(seat);
+
+  /// 被轉換者在**查驗**上是否已經顯示為狼。
+  ///
+  /// 第一夜查是好人，**第二夜起**才是狼（擔當 2026-09-22 指定）。
+  /// 熊沒有這個延遲 —— 那是另一條路，見 `NightArbitrator.bearGrowls`。
+  bool convertedShowsAsWolf(int seat) {
+    if (!isConverted(seat)) return false;
+    final night = conversionNight;
+    return night != null && dayNumber > night;
+  }
+
+  /// 目前還活著的被轉換者。
+  List<int> get aliveConvertedSeats =>
+      convertedSeats.where((s) => playerAt(s).alive).toList()..sort();
+
+  /// 該接下狼刀的被轉換者；條件不成立時為 null。
+  ///
+  /// 開刀順位的第 3 順位（擔當 2026-09-22 指定）：石像鬼全部出局、
+  /// 機械狼也出局，而且**只剩一位**被轉換者。兩位都還活著的那幾晚
+  /// 狼隊沒有人能開刀 —— 這是刻意的，不要「修正」成兩位一起開。
+  int? get convertedKnifeHolder {
+    final aliveTeam = players.where(
+      (p) =>
+          p.alive && p.role != null && Roles.wolfTeamIds.contains(p.role!.id),
+    );
+    if (aliveTeam.isNotEmpty) return null;
+
+    final mechanic = seatOfRole(Roles.mechanicWolf.id);
+    if (mechanic != null && playerAt(mechanic).alive) return null;
+
+    final alive = aliveConvertedSeats;
+    return alive.length == 1 ? alive.first : null;
+  }
+
+  /// [seat] 是否已經因為接刀而喪失原技能。
+  bool hasLostSkills(int seat) => convertedActivatedSeats.contains(seat);
+
+  // ---- 白貓 ----
+
+  /// 白貓被判死的原因；null 表示還沒被判死（或本局沒有白貓）。
+  ///
+  /// 白貓**延後離場**：判死當下只翻牌，`alive` 維持 true，
+  /// 要到下一次放逐投票結束才真正出局。延後期間他**算活著**
+  /// ——有投票權、可以發言、勝負判定也算他一份。
+  DeathCause? whiteCatPendingCause;
+
+  /// 白貓的死亡要在「第幾天的放逐投票結束後」生效。
+  ///
+  /// - **夜裡**被判死 → 當天（同一個 `dayNumber`）的放逐投票結束後生效
+  /// - **白天**被判死（放逐、開槍、殉情）→ **隔天**那一次才生效
+  ///   （擔當 2026-09-22 指定：不是當下這一次）
+  int? whiteCatDeathDueAfterDay;
+
+  /// 白貓是否已經翻牌 —— 判死當下就公開身分，只有死亡延後。
+  bool get whiteCatRevealed => whiteCatPendingCause != null;
+
+  /// [seat] 這次的死亡要不要改成白貓的延後離場。
+  ///
+  /// 成立時**記下延後、回傳 true**，呼叫端就不要把他標成出局了。
+  /// 已經在延後中的白貓不會再被判一次 —— 那段期間他禁止成為技能目標，
+  /// 照理碰不到，這裡只是防呆。
+  bool deferWhiteCatDeath(int seat, DeathCause cause) {
+    if (playerAt(seat).role?.id != Roles.whiteCat.id) return false;
+    if (whiteCatPendingCause != null) return false;
+
+    whiteCatPendingCause = cause;
+    // 夜裡判死 → 當天的放逐投票結束後生效；
+    // 白天判死 → **隔天**那一次才生效（擔當指定，不是當下這一次）。
+    whiteCatDeathDueAfterDay =
+        phase == GamePhase.night ? dayNumber : dayNumber + 1;
+    return true;
+  }
+
+  /// 白貓延後的死亡是否已經到期（可以在這一天的放逐投票結束後生效）。
+  bool get whiteCatDeathIsDue =>
+      whiteCatPendingCause != null &&
+      whiteCatDeathDueAfterDay != null &&
+      dayNumber >= whiteCatDeathDueAfterDay!;
+
+  /// 白貓現在是否在「已翻牌但還沒離場」的延後期間。
+  ///
+  /// 這段期間他**禁止成為技能目標** —— 刀、毒、救、守、攝夢都不能選他。
+  bool isWhiteCatPending(int seat) =>
+      whiteCatPendingCause != null &&
+      playerAt(seat).role?.id == Roles.whiteCat.id &&
+      playerAt(seat).alive;
+
+  // ---- 攝夢人 ----
+
+  /// 攝夢人**上一晚**攝的座次。連續兩晚攝同一人會讓那人夢死，
+  /// 所以要記住上一晚是誰。
+  int? lastDreamTarget;
+
+  // ---- 暗戀者 ----
+
+  /// 暗戀者首夜指定的暗戀對象座次。null 表示還沒選（或本局沒有暗戀者）。
+  ///
+  /// 只留著給復盤與畫面顯示用 —— 勝負判定看的是 [secretAdmirerCamp]，
+  /// 不是這個人現在站哪邊。
+  int? secretAdmirerTarget;
+
+  /// 暗戀者跟著贏的陣營，**在首夜選定的那一刻就固定**（擔當 2026-09-22 指定）。
+  ///
+  /// 刻意存陣營而不是每次去讀對象現在的陣營：對象若是被轉換者，
+  /// 陣營會在局中改變，但暗戀者跟的是**選的時候**那一邊。存下來就不會
+  /// 因為之後查詢的時機不同而給出不一樣的答案。
+  ///
+  /// 對象死了也不變 —— 勝負條件不隨對象出局而改。
+  Camp? secretAdmirerCamp;
+
   /// 復盤日誌。**只寫入，不用來推導狀態** —— 局面的真相在這個物件的其他
   /// 欄位裡，這份只是給人看的。撤銷會連它一起退回去。
   final GameLog log;
@@ -183,8 +319,17 @@ class GameState {
 
   int get aliveCount => alivePlayers.length;
 
+  /// 屠邊人頭要用的身分類別。
+  ///
+  /// **被轉換者一律算狼**（擔當 2026-09-22 指定）—— 被轉換的女巫不再是
+  /// 神職人頭，狼隊離屠邊更近一步。轉換是很強的技能，這是它的主要收益。
+  RoleKind? effectiveKindOf(Player p) {
+    if (p.role == null) return null;
+    return isConverted(p.seat) ? RoleKind.wolf : p.role!.kind;
+  }
+
   int aliveCountOfKind(RoleKind kind) =>
-      alivePlayers.where((p) => p.role?.kind == kind).length;
+      alivePlayers.where((p) => effectiveKindOf(p) == kind).length;
 
   int get aliveWolfCount => aliveCountOfKind(RoleKind.wolf);
   int get aliveGodCount => aliveCountOfKind(RoleKind.god);
@@ -287,6 +432,18 @@ class GameState {
     mechanicCharmedSeat = snapshot.mechanicCharmedSeat;
     lastMechanicCharmTarget = snapshot.lastMechanicCharmTarget;
     knightDuelUsed = snapshot.knightDuelUsed;
+    convertedSeats
+      ..clear()
+      ..addAll(snapshot.convertedSeats);
+    convertedActivatedSeats
+      ..clear()
+      ..addAll(snapshot.convertedActivatedSeats);
+    conversionNight = snapshot.conversionNight;
+    whiteCatPendingCause = snapshot.whiteCatPendingCause;
+    whiteCatDeathDueAfterDay = snapshot.whiteCatDeathDueAfterDay;
+    lastDreamTarget = snapshot.lastDreamTarget;
+    secretAdmirerTarget = snapshot.secretAdmirerTarget;
+    secretAdmirerCamp = snapshot.secretAdmirerCamp;
     log.restoreFrom(snapshot.log);
   }
 
@@ -312,6 +469,12 @@ class GameState {
         mechanicCharmedSeat: mechanicCharmedSeat,
         lastMechanicCharmTarget: lastMechanicCharmTarget,
         knightDuelUsed: knightDuelUsed,
+        conversionNight: conversionNight,
+        whiteCatPendingCause: whiteCatPendingCause,
+        whiteCatDeathDueAfterDay: whiteCatDeathDueAfterDay,
+        lastDreamTarget: lastDreamTarget,
+        secretAdmirerTarget: secretAdmirerTarget,
+        secretAdmirerCamp: secretAdmirerCamp,
         log: log.copy(),
       );
 }

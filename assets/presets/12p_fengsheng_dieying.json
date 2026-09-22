@@ -1,0 +1,39 @@
+{
+  "presetId": "12p_fengsheng_dieying",
+  "name": "12人 風聲諜影",
+  "playerCount": 12,
+  "roles": [
+    { "role": "awakenedGargoyle", "count": 2 },
+    { "role": "mechanicWolf",     "count": 1 },
+    { "role": "seer",             "count": 1 },
+    { "role": "psychic",          "count": 1 },
+    { "role": "bear",             "count": 1 },
+    { "role": "witch",            "count": 1 },
+    { "role": "hunter",           "count": 1 },
+    { "role": "dreamWeaver",      "count": 1 },
+    { "role": "pufferfish",       "count": 1 },
+    { "role": "whiteCat",         "count": 1 },
+    { "role": "secretAdmirer",    "count": 1 }
+  ],
+  "nightOrder": [
+    "mechanicWolf",
+    "secretAdmirer",
+    "dreamWeaver",
+    "awakenedGargoyle",
+    "bear",
+    "witch",
+    "hunter",
+    "psychic",
+    "seer"
+  ],
+  "rules": {
+    "guardHealKills": true,
+    "witchDualUseSameNight": false,
+    "guardCannotRepeatTarget": true,
+    "poisonedHunterCannotShoot": true,
+    "sheriffVoteWeight": 1.5,
+    "tieBreak": "pk_then_none",
+    "winCondition": "sideElimination",
+    "wolfSelfDetonateEndsDay": true
+  }
+}

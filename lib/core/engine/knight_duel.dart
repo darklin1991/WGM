@@ -134,9 +134,15 @@ class KnightDuel {
   }
 
   void _kill(int seat) {
-    state.playerAt(seat).alive = false;
     state.playerAt(seat).nightFacts.add(FactTag.shot);
     deaths.add(Death(seat: seat, cause: DeathCause.knightDuel));
+
+    // 白貓翻牌但不當場離場 —— 決鬥掉的也一樣走延後那條路。
+    if (state.deferWhiteCatDeath(seat, DeathCause.knightDuel)) {
+      _note('白貓（$seat 號）翻牌，但要到隔天的放逐投票結束才真正出局');
+      return;
+    }
+    state.playerAt(seat).alive = false;
   }
 
   /// 記一句宣布稿，同時寫進復盤日誌 —— 兩件事綁在一起做才不會漏。

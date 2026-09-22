@@ -135,9 +135,14 @@ class _NightFlowPageState extends State<NightFlowPage> {
         NightSub.pickSpecial => '哪一位是${_specialRole.nameZh}？',
         NightSub.witchPotion => '${_step.title}請睜眼',
         NightSub.hunterGesture => '${_step.title}請睜眼',
+        NightSub.bearGrowl => '熊請睜眼',
+        NightSub.gargoyleConvert =>
+          '${_m.currentGargoyleSeat} 號石像鬼要轉換誰？',
         NightSub.mechanicReveal => '機械狼請睜眼',
         NightSub.mechanicKnifeGesture => '機械狼請睜眼',
         NightSub.passThrough => '$_callName請睜眼',
+        // 查驗者這時還睜著眼 —— 標題直接寫要比給誰看。
+        NightSub.inspectResult => '比給$_callName看',
         NightSub.mechanicKnife =>
           _hasExtraKnife ? '機械狼第一刀要砍誰？' : '機械狼要刀誰？',
         NightSub.secondKnife => '機械狼第二刀要砍誰？',
@@ -148,6 +153,8 @@ class _NightFlowPageState extends State<NightFlowPage> {
             NightSkill.psychicInspect => '${_step.title}要查驗誰的身分？',
             NightSkill.charm => '${_step.title}要魅惑誰？',
             NightSkill.mechanicLearn => '機械狼要學習誰的技能？',
+            NightSkill.secretAdmire => '暗戀者要暗戀誰？',
+            NightSkill.dreamWeave => '攝夢人要攝誰？',
             _ => _step.title,
           },
       };
@@ -163,6 +170,9 @@ class _NightFlowPageState extends State<NightFlowPage> {
                     ? '請填入 ${_step.seatCount} 位的座次號碼'
                     : '請填入座次號碼',
         NightSub.hunterGesture => '請對獵人做出下面的手勢',
+        NightSub.bearGrowl => '只告訴他咆哮或不咆哮，**不要說是哪一位**',
+        NightSub.gargoyleConvert => '只能轉換自己的左右鄰座（死亡會往外順延）。'
+            '整局只有首夜這一次，不轉請直接按下一步',
         NightSub.pickSpecial => _specialRole.id == Roles.wolfKing.id
             ? '狼王出局時可以開槍帶人，需要單獨記錄'
             : '狼美人出局時被魅惑者會殉情，需要單獨記錄',
@@ -171,6 +181,8 @@ class _NightFlowPageState extends State<NightFlowPage> {
         NightSub.mechanicKnifeGesture => '機械狼不知道小狼死光了沒，'
             '每晚都要由法官比手勢告知今晚有沒有刀',
         NightSub.passThrough => '照常喊完再讓他們閉眼，不要跳過',
+        // 這是唯一能告知的時機 —— 按下一步他就閉眼了。
+        NightSub.inspectResult => '趁$_callName還睜著眼，把結果比給他看',
         NightSub.mechanicKnife => '空刀請直接按下一步',
         NightSub.secondKnife => '機械狼已學到狼人，這晚多一刀。'
             '${_actions.wolfTarget == null ? "第一刀空刀。" : "第一刀砍了 ${_actions.wolfTarget} 號，"}'
@@ -182,30 +194,28 @@ class _NightFlowPageState extends State<NightFlowPage> {
             NightSkill.psychicInspect => '通靈師看到的是真實身分，不只好人／狼人',
             NightSkill.mechanicLearn =>
               '整局只能學一次，隔夜起才生效。不學請直接按下一步',
+            NightSkill.secretAdmire => '勝負跟著對象的陣營走，選定就固定 ——'
+                '對象之後變狼也不改。只有首夜有這一步',
+            NightSkill.dreamWeave => '夢遊者免疫今晚的一切傷害（連毒都擋），'
+                '但連續兩晚攝同一人會讓他夢死。不攝請直接按下一步',
             _ => '',
           },
       };
 
-  /// 機械狼學到守衛時，守護紀錄與原守衛各自獨立，提示要跟著換。
-  int? get _lastGuardOfActor => _step.byMechanicWolf
-      ? _state.lastMechanicGuardTarget
-      : _state.lastGuardTarget;
-
+  /// 連守／連魅惑的限制生不生效、昨晚是誰，一律問狀態機
+  /// （機械狼學到守衛時紀錄與原守衛各自獨立，那也在引擎裡分好了）。
+  /// 頁面不重讀規則旗標 —— 同一條規則只有一個判斷點。
   String get _guardHint {
-    final last = _lastGuardOfActor;
-    if (last != null && _state.preset.rules.guardCannotRepeatTarget) {
+    final last = _m.blockedSeatFor(SeatBlockReason.guardedLastNight);
+    if (last != null) {
       return '不可連續兩晚守同一人（昨晚守了 $last 號）';
     }
     return '不守請直接按下一步';
   }
 
-  int? get _lastCharmOfActor => _step.byMechanicWolf
-      ? _state.lastMechanicCharmTarget
-      : _state.lastCharmTarget;
-
   String get _charmHint {
-    final last = _lastCharmOfActor;
-    if (last != null && _state.preset.rules.charmCannotRepeatTarget) {
+    final last = _m.blockedSeatFor(SeatBlockReason.charmedLastNight);
+    if (last != null) {
       return '不可連續兩晚魅惑同一人（昨晚魅惑了 $last 號）';
     }
     return '不魅惑請直接按下一步';
@@ -255,6 +265,8 @@ class _NightFlowPageState extends State<NightFlowPage> {
           SeatBlockReason.guardedLastNight => '昨晚已守',
           SeatBlockReason.charmedLastNight => '昨晚已魅惑',
           SeatBlockReason.wolfBeautySelfKill => '狼美人不能自刀',
+          SeatBlockReason.secretAdmirerSelf => '不能暗戀自己',
+          SeatBlockReason.whiteCatPending => '白貓已翻牌，離場前不能被指定',
           SeatBlockReason.mechanicSelfLearn => '不能學自己',
           SeatBlockReason.witchDualUse => '本局不可同夜雙藥',
         },
@@ -350,6 +362,16 @@ class _NightFlowPageState extends State<NightFlowPage> {
                           _actions.mechanicWolfLearnTarget != null,
                       canShoot:
                           _m.mechanicCanShootTonight,
+                    )
+                  : _sub == NightSub.bearGrowl
+                  ? _BearGrowlCard(
+                      neighbours: _m.bearNeighbors,
+                      growls: _m.bearGrowls,
+                    )
+                  : _sub == NightSub.inspectResult
+                  ? _InspectResultCard(
+                      reveal: _m.inspectReveal!,
+                      ownerLabel: _callName,
                     )
                   : _sub == NightSub.hunterGesture
                   ? _HunterGestureCard(
@@ -971,6 +993,177 @@ class _HunterGestureCard extends StatelessWidget {
               _ when canShoot => '$ownerLabel為 $seat 號，技能正常',
               _ => '$ownerLabel（$seat 號）目前無法開槍',
             },
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 查驗結果卡：法官趁查驗者睜著眼時比給他看。
+///
+/// 預言家只分金水／查殺；通靈師看到的是真實身分，所以把角色名寫出來。
+class _InspectResultCard extends StatelessWidget {
+  const _InspectResultCard({required this.reveal, required this.ownerLabel});
+
+  final InspectReveal reveal;
+
+  /// 這張卡是給誰的：「預言家」「通靈師」，或機械狼學來的那一種。
+  final String ownerLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isWolf = reveal.sawWolf;
+    final color = isWolf ? WgmTheme.wolfColor : WgmTheme.godColor;
+    final unknown = reveal.role == null;
+
+    // 通靈師報的是身分名；預言家報金水／查殺。
+    final headline = reveal.isPsychic
+        ? (reveal.role?.nameZh ?? '尚未登記')
+        : (isWolf ? '查殺' : '金水');
+    final sub = reveal.isPsychic
+        ? '${reveal.seat} 號的真實身分'
+        : (isWolf ? '${reveal.seat} 號是狼人' : '${reveal.seat} 號是好人');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Card(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: color.withValues(alpha: 0.12),
+                border: Border.all(color: color.withValues(alpha: 0.6)),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    reveal.isPsychic
+                        ? Icons.auto_awesome_rounded
+                        : (isWolf
+                            ? Icons.thumb_down_rounded
+                            : Icons.thumb_up_rounded),
+                    size: 72,
+                    color: color,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    headline,
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    sub,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            unknown
+                // 首夜邊問邊登記時，排在查驗者後面的角色還沒登記。
+                // 結算會把剩下的座次補成平民，所以這時照金水給就是對的。
+                ? '${reveal.seat} 號的身分還沒登記，結算後會是平民 —— 比金水給$ownerLabel'
+                : '按下一步之後$ownerLabel就閉眼了，確認已經比給他看',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 熊的咆哮卡。
+///
+/// **只給是／否**，鄰座號碼寫在下面是給法官核對用的 ——
+/// 那兩個號碼不能講出來，講了熊就直接知道狼在哪一側。
+class _BearGrowlCard extends StatelessWidget {
+  const _BearGrowlCard({required this.neighbours, required this.growls});
+
+  /// 今晚兩側的鄰座（死亡會往外順延，所以每晚可能不同）。
+  final List<int> neighbours;
+
+  final bool growls;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = growls ? WgmTheme.wolfColor : WgmTheme.godColor;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Card(
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: color.withValues(alpha: 0.12),
+                border: Border.all(color: color.withValues(alpha: 0.6)),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    growls
+                        ? Icons.campaign_rounded
+                        : Icons.volume_off_rounded,
+                    size: 72,
+                    color: color,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    growls ? '咆哮' : '不咆哮',
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      color: color,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    growls ? '兩側有狼' : '兩側都沒有狼',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            neighbours.isEmpty
+                ? '場上沒有其他存活玩家，沒有鄰座可看'
+                // 號碼只給法官核對，**不能講給熊聽**。
+                : '今晚的鄰座是 ${neighbours.join("、")} 號'
+                    '（法官核對用，不要念出來）。鄰座出局會往外順延，每晚重算',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 13,

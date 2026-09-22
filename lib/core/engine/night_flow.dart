@@ -25,6 +25,26 @@ enum NightSkill {
   /// 機械狼學習一名玩家的身分技能（整局限一次，隔夜起生效）。
   mechanicLearn,
 
+  /// 攝夢人指定夢遊者。夢遊者免疫夜間傷害，連續兩晚被攝會夢死。
+  dreamWeave,
+
+  /// 覺醒石像鬼轉換相鄰座次的一位玩家。**只有首夜**。
+  ///
+  /// 兩隻石像鬼各選一次，所以這一步會逐隻問過去。
+  gargoyleConvert,
+
+  /// 熊：法官看兩側鄰座有沒有狼，給「咆哮／不咆哮」。
+  ///
+  /// 與 [hunterGesture] 同型 —— 沒有目標要選，只是把一則資訊比給他看。
+  /// **每晚都有**：鄰座會因為死亡而往外順延，答案每晚都可能不同。
+  bearGrowl,
+
+  /// 暗戀者指定暗戀對象。**只有首夜**，之後不再叫起來。
+  ///
+  /// 勝負跟著對象**當下**的陣營走，選完就固定 —— 對象之後被轉換成狼
+  /// 也不改，見 `GameState.secretAdmirerCamp`。
+  secretAdmire,
+
   /// 機械狼在夜晚開頭的那一輪，**每晚都有**。依序是：
   ///
   /// 1. 開刀手勢 —— 機械狼不與小狼相認，自己不知道小狼死光了沒，
@@ -54,8 +74,14 @@ enum NightSkill {
 
 /// 首夜的一個步驟。
 ///
-/// 首夜的流程是「先登記是誰，再發動技能」——法官不預先登記全部身分，
-/// 而是依夜晚順序邊問邊登記：「守衛請睜眼，你是幾號」→「你要守誰」。
+/// [seatCount] 是這一步**最多**要登記幾個座次，不代表一定會問。
+/// 擔當 2026-09-19 決定身分一律在開局前的登記頁配完，所以實際跑局時
+/// 座次早就知道了，`NightFlowMachine.needsRegistration()` 會跳過登記，
+/// 直接進技能。
+///
+/// 步驟本身仍帶著登記資訊，是因為引擎另外支援「夜裡邊問邊登記」
+/// （「守衛請睜眼，你是幾號」→「你要守誰」）—— 那條路目前介面沒有入口，
+/// 但單元測試還在跑它。
 class NightStep {
   const NightStep({
     required this.title,
@@ -145,16 +171,38 @@ abstract final class NightFlow {
       }
       if (teamRoles.isEmpty) return;
 
+      // 整個狼隊只有一種身分時不必指認 —— 沒有別的身分要分辨。
+      // 風聲諜影的狼隊就是兩隻覺醒石像鬼，問「哪一位是石像鬼」毫無意義。
+      if (teamRoles.length == 1) specials.clear();
+
+      // 沒有一般狼時，喊的與記的都用那個實際身分（例如覺醒石像鬼），
+      // 否則畫面會出現不存在的「狼人」。
+      final primary = teamRoles.length == 1 ? teamRoles.first : Roles.wolf;
+
       steps.add(
         NightStep(
-          title: '狼人',
+          title: primary.nameZh,
           roles: teamRoles,
           seatCount: seatCount,
           skill: NightSkill.wolfKill,
-          primaryRole: Roles.wolf,
+          primaryRole: primary,
           specialPicks: specials,
         ),
       );
+
+      // 覺醒石像鬼在決定刀口之後，**首夜**各自轉換一位相鄰座次
+      // （座次已於狼隊步驟登記完）。要排在熊之前，熊首夜才咆哮得出來。
+      if (countOf(Roles.awakenedGargoyle.id) > 0) {
+        steps.add(
+          const NightStep(
+            title: '覺醒石像鬼',
+            roles: [Roles.awakenedGargoyle],
+            seatCount: 0,
+            skill: NightSkill.gargoyleConvert,
+            primaryRole: Roles.awakenedGargoyle,
+          ),
+        );
+      }
 
       // 狼美人在狼隊決定刀口之後，單獨睜眼魅惑（座次已於狼隊步驟登記完）。
       if (countOf(Roles.wolfBeauty.id) > 0) {
@@ -221,6 +269,19 @@ abstract final class NightFlow {
     return steps;
   }
 
+  /// 這一步的角色是不是**已經接刀因而喪失技能**的被轉換者。
+  ///
+  /// 被轉換者保有原技能一直用到接刀那一刻（擔當 2026-09-22 指定），
+  /// 所以不能一被轉換就把他的步驟拿掉 —— 只有真的接了刀才失效。
+  ///
+  /// 多人角色（一般狼、平民）不套用：那些身分不會單獨對應一個人。
+  static bool _lostSkillsStep(GameState state, NightStep step) {
+    final role = step.primaryRole;
+    if (role == null || role.allowsMultiple) return false;
+    final seat = state.seatOfRole(role.id);
+    return seat != null && state.hasLostSkills(seat);
+  }
+
   static const _revealStep = NightStep(
     title: '機械狼',
     roles: [Roles.mechanicWolf],
@@ -264,6 +325,27 @@ abstract final class NightFlow {
 
     for (final step in firstNightSteps(state.preset)) {
       if (step.skill == NightSkill.none) continue;
+
+      // 暗戀者只有首夜選對象，之後整局不再叫起來。
+      if (step.skill == NightSkill.secretAdmire) continue;
+
+      // 轉換只有首夜，第二夜起石像鬼就只剩開刀。
+      if (step.skill == NightSkill.gargoyleConvert) continue;
+
+      // 被轉換者接刀之後**喪失原技能** —— 他原本那一步就沒有東西可收了。
+      // 仍然保留成走過場：跳掉會讓玩家從流程長度聽出事情有變。
+      if (_lostSkillsStep(state, step)) {
+        steps.add(
+          NightStep(
+            title: step.title,
+            roles: step.roles,
+            seatCount: 0,
+            skill: NightSkill.none,
+            primaryRole: step.primaryRole,
+          ),
+        );
+        continue;
+      }
 
       // 小狼全滅時狼隊那一步會被自動跳過（角色全死），刀改由機械狼在
       // 自己那一輪開 —— 見 [NightSkill.mechanicTurn]。
@@ -351,6 +433,9 @@ abstract final class NightFlow {
         'seer' => NightSkill.seerInspect,
         'psychic' => NightSkill.psychicInspect,
         'hunter' => NightSkill.hunterGesture,
+        'bear' => NightSkill.bearGrowl,
+        'dreamWeaver' => NightSkill.dreamWeave,
+        'secretAdmirer' => NightSkill.secretAdmire,
         _ => NightSkill.none,
       };
 }

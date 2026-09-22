@@ -79,6 +79,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
         ExileStage.runoffSpeech => '平票 PK 發言',
         ExileStage.runoffVote => '平票 PK · 重新投票',
         ExileStage.shoot => '${_v.shooterSeat} 號要開槍帶走誰？',
+        ExileStage.pufferfishReveal => '河豚要翻牌嗎？',
         ExileStage.done => '放逐結算',
       };
 
@@ -88,6 +89,9 @@ class _ExileVotePageState extends State<ExileVotePage> {
             : '喊「投 ${_v.focusedTarget} 號的請舉手」，圈選舉手的人',
         ExileStage.runoffSpeech => '平票者各講一輪，講完開始重投',
         ExileStage.shoot => '不開槍請直接按下一步',
+        ExileStage.pufferfishReveal =>
+          '翻牌會帶走投他的 ${_v.pufferfishVoters.length} 位，被帶走的人不能開槍。'
+              '不翻請直接按下一步',
         ExileStage.done => '',
       };
 
@@ -279,6 +283,22 @@ class _ExileVotePageState extends State<ExileVotePage> {
                         ),
                       ),
                     ),
+                  // 河豚翻牌是主動技能，要明確按下去才發動 ——
+                  // 下面那顆通用的下一步是「不翻」。
+                  if (_v.stage == ExileStage.pufferfishReveal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: FilledButton.icon(
+                        onPressed: () => setState(
+                          () => _v.revealPufferfish(activate: true),
+                        ),
+                        icon: const Icon(Icons.flare_rounded, size: 18),
+                        label: Text(
+                          '翻牌帶走 '
+                          '${(_v.pufferfishVoters.toList()..sort()).join("、")} 號',
+                        ),
+                      ),
+                    ),
                   // PK 發言的推進鍵長在碼表上，這裡不要再放一顆。
                   if (!_isRunoffSpeech)
                     FilledButton(
@@ -299,6 +319,8 @@ class _ExileVotePageState extends State<ExileVotePage> {
         ExileStage.runoffSpeech => 'PK 發言結束，開始重投',
         ExileStage.shoot =>
           _shotTarget == null ? '放棄開槍' : '開槍帶走 $_shotTarget 號',
+        // 翻牌是主動技能，得另外按一顆；這顆是「不翻」。
+        ExileStage.pufferfishReveal => '不翻牌',
         // 放逐或開槍把警長帶走時，下一站是警徽流而不是黑夜 —— 按鈕要講實話。
         ExileStage.done => BadgeSuccession.isDue(widget.state)
             ? '接著處理警徽流'
