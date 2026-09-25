@@ -68,7 +68,37 @@ enum NightSkill {
   /// 所以每晚都得睜眼看法官手勢。
   hunterGesture,
 
+  /// 首夜的最後，法官逐一叫醒被轉換者告知（擔當 2026-09-22 指定：
+  /// 「第一位轉換者請睜眼」）。**只有首夜**，只在有覺醒石像鬼的板子。
+  ///
+  /// 兩隻石像鬼一定各轉換一位、不會撞車（擔當 2026-09-25 指定），所以固定叫
+  /// 兩次。某隻選到機械狼（轉換悄悄白費）時那一格沒有人 —— 照樣喊，
+  /// 少喊一次玩家從流程長度就聽得出來（同「角色全滅照樣走過場」）。
+  convertedNotify,
+
+  /// 第二夜起，法官逐一叫醒被轉換者，比**開刀手勢**（擔當 2026-09-25 指定）。
+  ///
+  /// 被轉換者不與任何人相認，自己不知道石像鬼與機械狼死光了沒 —— 有沒有刀
+  /// 只有法官知道，所以每晚都要比（同機械狼的開刀手勢）。有刀的那一位就在
+  /// 這一輪選刀口，狼隊那一格改走過場。
+  ///
+  /// 排在狼隊步驟**之前**（一般板子守衛的位置；風聲諜影沒有守衛，就是攝夢人
+  /// 之後）。叫的次數固定是石像鬼的數量，理由同 [convertedNotify]。
+  convertedTurn,
+
   /// 無夜間行動，只在首夜登記座次（白痴、騎士等）。
+  none,
+}
+
+/// 機械狼學到的技能什麼時候開始算，見 [NightFlow.mechanicSkillTimingOf]。
+enum MechanicSkillTiming {
+  /// 夜間技能：學習當晚不生效，隔夜起才用得到。
+  nextNight,
+
+  /// 出局時才觸發的被動技能（槍、河豚、白貓）：學到就生效。
+  immediate,
+
+  /// 沒有技能，只套用身分偽裝。
   none,
 }
 
@@ -266,6 +296,13 @@ abstract final class NightFlow {
       steps.add(_revealStep);
     }
 
+    // 被轉換者要等轉換發生才叫得起來，排在整夜的最後
+    //（見 [NightSkill.convertedNotify]）。放在機械狼結尾那一輪之後也不影響
+    // 牠的理由 —— 那一輪要的是「身分登記完、毒收完」，這裡照樣成立。
+    if (preset.roles.any((s) => s.role.id == Roles.awakenedGargoyle.id)) {
+      steps.add(_convertedNotifyStep);
+    }
+
     return steps;
   }
 
@@ -279,7 +316,7 @@ abstract final class NightFlow {
     final role = step.primaryRole;
     if (role == null || role.allowsMultiple) return false;
     final seat = state.seatOfRole(role.id);
-    return seat != null && state.hasLostSkills(seat);
+    return seat != null && state.losesSkillsTonight(seat);
   }
 
   static const _revealStep = NightStep(
@@ -291,6 +328,20 @@ abstract final class NightFlow {
     byMechanicWolf: true,
   );
 
+  static const _convertedNotifyStep = NightStep(
+    title: '轉換者',
+    roles: [],
+    seatCount: 0,
+    skill: NightSkill.convertedNotify,
+  );
+
+  static const _convertedTurnStep = NightStep(
+    title: '轉換者',
+    roles: [],
+    seatCount: 0,
+    skill: NightSkill.convertedTurn,
+  );
+
   /// 第二夜起的步驟：身分已登記，只收集技能目標，不再填座次。
   ///
   /// 獵人雖然沒有夜間行動，但每晚都要叫起來確認開槍手勢，所以保留；
@@ -300,7 +351,8 @@ abstract final class NightFlow {
   /// [laterNightStepsFor]。
   static List<NightStep> laterNightSteps(Preset preset) => [
         for (final step in firstNightSteps(preset))
-          if (step.skill != NightSkill.none)
+          if (step.skill != NightSkill.none &&
+              step.skill != NightSkill.convertedNotify)
             NightStep(
               title: step.title,
               roles: step.roles,
@@ -332,7 +384,18 @@ abstract final class NightFlow {
       // 轉換只有首夜，第二夜起石像鬼就只剩開刀。
       if (step.skill == NightSkill.gargoyleConvert) continue;
 
+      // 告知被轉換者也只有首夜。
+      if (step.skill == NightSkill.convertedNotify) continue;
+
+      // 轉換者的開刀手勢排在狼隊之前 —— 有刀的那一位要在那裡開刀。
+      if (step.skill == NightSkill.wolfKill &&
+          state.preset.roles
+              .any((s) => s.role.id == Roles.awakenedGargoyle.id)) {
+        steps.add(_convertedTurnStep);
+      }
+
       // 被轉換者接刀之後**喪失原技能** —— 他原本那一步就沒有東西可收了。
+      // 接刀的**那一夜**就算（見 `GameState.losesSkillsTonight`）。
       // 仍然保留成走過場：跳掉會讓玩家從流程長度聽出事情有變。
       if (_lostSkillsStep(state, step)) {
         steps.add(
@@ -414,15 +477,38 @@ abstract final class NightFlow {
   ///   （見 [GameState.mechanicHasExtraKnifeOn]）
   /// - 學到**槍牌**（獵人、狼王）在這一格也沒事做 —— 開槍手勢改在夜晚結尾的
   ///   [NightSkill.mechanicReveal] 給，因為那時候才收完女巫的毒
-  /// - 學到平民、白痴、騎士、機械狼沒有夜間動作
+  /// - 學到**熊**看的是機械狼自己的鄰座；學到**攝夢人**有自己的夢遊者與
+  ///   「上一晚」紀錄（擔當 2026-09-25 指定，風聲諜影）
+  /// - 學到**河豚、白貓**在這一格也沒事做 —— 那是出局時才觸發的被動技能
+  /// - 學到平民、白痴、騎士、機械狼、**暗戀者、覺醒石像鬼**沒有技能，
+  ///   只套用身分偽裝（擔當 2026-09-25 指定後兩者）
   static NightSkill mechanicSkillOf(Role learned) => switch (learned.id) {
         'guard' => NightSkill.guardProtect,
         'witch' => NightSkill.witchPotion,
         'seer' => NightSkill.seerInspect,
         'psychic' => NightSkill.psychicInspect,
         'wolfBeauty' => NightSkill.charm,
+        'bear' => NightSkill.bearGrowl,
+        'dreamWeaver' => NightSkill.dreamWeave,
         _ => NightSkill.none,
       };
+
+  /// 機械狼學到 [learned] 之後，技能什麼時候開始算。
+  ///
+  /// - 夜間技能（含學到狼人的第二刀）**隔夜生效**
+  /// - 出局時才觸發的被動技能（槍、河豚、白貓）**學到就生效**
+  ///   —— 擔當 2026-09-24 指定槍如此，河豚與白貓比照
+  /// - 其餘沒有技能，只套用身分偽裝
+  static MechanicSkillTiming mechanicSkillTimingOf(Role learned) {
+    if (Roles.mechanicPassiveIds.contains(learned.id)) {
+      return MechanicSkillTiming.immediate;
+    }
+    if (mechanicSkillOf(learned) != NightSkill.none ||
+        learned.id == Roles.wolf.id) {
+      return MechanicSkillTiming.nextNight;
+    }
+    return MechanicSkillTiming.none;
+  }
 
   static NightSkill skillOf(Role role) => switch (role.id) {
         'guard' => NightSkill.guardProtect,

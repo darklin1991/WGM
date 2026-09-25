@@ -184,6 +184,102 @@ void main() {
     });
   });
 
+  // 法官在「獵人請睜眼」時比的手勢是**預告**：今晚若出局能不能開槍。
+  // 以前只看毒 —— 獵人今晚會夢死，手勢卻比「可開槍」，天亮後又不讓他開。
+  group('獵人的開槍手勢', () {
+    test('連續第二晚被攝 → 比「不可開槍」', () {
+      final s = _state()
+        ..dayNumber = 2
+        ..lastDreamTarget = 6;
+      final a = NightActions(night: 2)..dreamTarget = 6;
+
+      expect(_arb.hunterCanShootTonight(s, a), isFalse);
+      expect(_arb.gunBlockedTonight(s, a, 6), DeathCause.dreamDeath);
+    });
+
+    test('他是夢遊者、攝夢人今晚被刀 → 一併夢死，比「不可開槍」', () {
+      final s = _state();
+      final a = NightActions(night: 1)
+        ..dreamTarget = 6
+        ..wolfTarget = 8; // 8 號攝夢人
+
+      expect(_arb.hunterCanShootTonight(s, a), isFalse);
+      expect(_arb.gunBlockedTonight(s, a, 6), DeathCause.dreamDeath);
+    });
+
+    test('被毒但正在夢遊 → 毒沒作用，槍完好', () {
+      final s = _state();
+      final a = NightActions(night: 1)
+        ..dreamTarget = 6
+        ..witchPoisonTarget = 6;
+
+      expect(_arb.hunterCanShootTonight(s, a), isTrue);
+      expect(_arb.gunBlockedTonight(s, a, 6), isNull);
+    });
+
+    test('對照：被毒、沒被攝 → 比「不可開槍」', () {
+      final s = _state();
+      final a = NightActions(night: 1)..witchPoisonTarget = 6;
+
+      expect(_arb.hunterCanShootTonight(s, a), isFalse);
+      expect(_arb.gunBlockedTonight(s, a, 6), DeathCause.poison);
+    });
+
+    test('對照：只被刀 → 比「可開槍」', () {
+      final s = _state();
+      final a = NightActions(night: 1)..wolfTarget = 6;
+
+      expect(_arb.hunterCanShootTonight(s, a), isTrue);
+    });
+
+    // 擔當 2026-09-25 確認：學到槍牌的機械狼走同一套判斷。
+    test('學到獵人的機械狼連續第二晚被攝 → 比「不可開槍」', () {
+      final s = GameState(
+        preset: Preset.fromJson(
+          const {
+            'presetId': 'dwm',
+            'name': '攝夢機械狼測試板',
+            'playerCount': 12,
+            'roles': [
+              {'role': 'wolf', 'count': 3},
+              {'role': 'mechanicWolf', 'count': 1},
+              {'role': 'dreamWeaver', 'count': 1},
+              {'role': 'hunter', 'count': 1},
+              {'role': 'villager', 'count': 6},
+            ],
+            'nightOrder': ['mechanicWolf', 'dreamWeaver', 'wolf'],
+          },
+          sourceName: 'dwm.json',
+        ),
+      );
+      // 1-3 狼、4 機械狼、5 攝夢人、6 獵人、7-12 平民。
+      final roles = <Role>[
+        Roles.wolf,
+        Roles.wolf,
+        Roles.wolf,
+        Roles.mechanicWolf,
+        Roles.dreamWeaver,
+        Roles.hunter,
+      ];
+      for (var seat = 1; seat <= 12; seat++) {
+        s.playerAt(seat).role =
+            seat <= roles.length ? roles[seat - 1] : Roles.villager;
+      }
+      s
+        ..dayNumber = 2
+        ..mechanicWolfLearnedRole = Roles.hunter
+        ..mechanicWolfLearnedNight = 1
+        ..lastDreamTarget = 4;
+
+      final dreamed = NightActions(night: 2)..dreamTarget = 4;
+      expect(_arb.mechanicCanShootTonight(s, dreamed), isFalse);
+      expect(_arb.gunBlockedTonight(s, dreamed, 4), DeathCause.dreamDeath);
+
+      final knifed = NightActions(night: 2)..wolfTarget = 4;
+      expect(_arb.mechanicCanShootTonight(s, knifed), isTrue, reason: '對照：吃刀能開');
+    });
+  });
+
   group('攝夢人出局的連帶', () {
     test('攝夢人今晚被刀 → 夢遊者一併死亡', () {
       final s = _state();

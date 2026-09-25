@@ -53,9 +53,8 @@ class NightActions {
 
   /// 覺醒石像鬼首夜轉換的對象。
   ///
-  /// 兩隻各選一位，但**兩隻選到同一人時只算一位**（擔當 2026-09-22 指定：
-  /// 就只有那一個人轉換進狼隊，另一次白費），所以用 Set 而不是 List ——
-  /// 型別本身就表達了規則。
+  /// 兩隻各選一位，**不會撞車** —— 第二隻選不到第一隻選過的人
+  /// （擔當 2026-09-25 指定，擋在 `NightFlowMachine` 的輸入階段）。
   final Set<int> gargoyleConvertTargets = {};
 
   // ---- 機械狼學到技能後的行動 ----
@@ -79,6 +78,10 @@ class NightActions {
   /// 機械狼（學到狼美人）魅惑的座次。
   int? mechanicCharmTarget;
 
+  /// 機械狼（學到攝夢人）指定的夢遊者。與原攝夢人各自獨立 —— 兩人的夢遊者
+  /// 都免疫、連兩晚各自算。
+  int? mechanicDreamTarget;
+
   bool get witchUsedAntidote => witchHealTarget != null;
   bool get witchUsedPoison => witchPoisonTarget != null;
 
@@ -98,7 +101,8 @@ class NightActions {
     ..mechanicGuardTarget = mechanicGuardTarget
     ..mechanicInspectTarget = mechanicInspectTarget
     ..mechanicPoisonTarget = mechanicPoisonTarget
-    ..mechanicCharmTarget = mechanicCharmTarget;
+    ..mechanicCharmTarget = mechanicCharmTarget
+    ..mechanicDreamTarget = mechanicDreamTarget;
 }
 
 /// 死亡原因，用於復盤與獵人開槍判定。
@@ -162,6 +166,8 @@ class NightOutcome {
     required this.seerSawWolf,
     required this.hunterMayShoot,
     this.wolfKingMayShoot = false,
+    this.shooterSeats = const <int>[],
+    this.whiteCatDeferredSeats = const <int>[],
     this.psychicResult,
     this.mechanicLearnedRole,
     this.mechanicSeerTarget,
@@ -217,6 +223,14 @@ class NightOutcome {
   /// 沒被自刀而死就一定是被毒，不能開。狼隊自己知道有沒有自刀，
   /// 所以狼王不需要每晚給手勢，白天起來直接發動。
   final bool wolfKingMayShoot;
+
+  /// 本夜出局、可以開槍的座次（獵人、被自刀的狼王、學到槍牌且吃刀的機械狼），
+  /// 依座次排序。白天一開始由 `NightDeathShot` 逐一記下開槍目標。
+  final List<int> shooterSeats;
+
+  /// [deaths] 裡的白貓（含學到白貓的機械狼）—— 只翻牌、不當場離場，
+  /// 要到今天的放逐投票結束才真正出局。依座次排序。
+  final List<int> whiteCatDeferredSeats;
 
   bool get isPeacefulNight => deaths.isEmpty;
 

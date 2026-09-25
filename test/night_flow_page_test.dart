@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wgm/core/models/game_state.dart';
@@ -797,6 +800,54 @@ void main() {
       expect(find.text('狼人請睜眼'), findsOneWidget);
       expect(find.text('機械狼第二刀要砍誰？'), findsNothing);
       expect(find.textContaining('照常喊'), findsWidgets);
+    });
+  });
+
+  // 擔當 2026-09-25 指定：第二夜起在狼隊之前叫轉換者比開刀手勢。
+  group('風聲諜影：轉換者的開刀手勢', () {
+    /// 照設定檔的角色順序配座次：1、2 石像鬼、3 機械狼 …… 12 暗戀者。
+    /// 12 號被轉換；石像鬼與機械狼都已出局，所以 12 號今晚有刀。
+    GameState seeded() {
+      final json = jsonDecode(
+        File('assets/presets/12p_fengsheng_dieying.json').readAsStringSync(),
+      ) as Map;
+      final state = GameState(
+        preset: Preset.fromJson(
+          json.cast<String, dynamic>(),
+          sourceName: '12p_fengsheng_dieying.json',
+        ),
+      );
+      var seat = 1;
+      for (final slot in state.preset.roles) {
+        for (var i = 0; i < slot.count; i++) {
+          state.playerAt(seat++).role = slot.role;
+        }
+      }
+      state.convertedSeats.add(12);
+      state.conversionNight = 1;
+      for (final dead in [1, 2, 3]) {
+        state.playerAt(dead).alive = false;
+      }
+      state.dayNumber = 1; // 已過首夜
+      return state;
+    }
+
+    testWidgets('有刀的那一位：拇指向上，接著選刀口；空的那一格照樣喊', (tester) async {
+      await tester.pumpWidget(_night(seeded()));
+
+      for (var i = 0; i < 5 && find.text('第一位轉換者請睜眼').evaluate().isEmpty; i++) {
+        await _next(tester);
+      }
+      expect(find.text('第一位轉換者請睜眼'), findsOneWidget);
+      expect(find.text('拇指向上'), findsOneWidget);
+      expect(find.text('今晚有刀'), findsOneWidget);
+
+      await _next(tester);
+      expect(find.text('12 號轉換者要刀誰？'), findsOneWidget);
+
+      await _next(tester); // 空刀
+      expect(find.text('第二位轉換者請睜眼'), findsOneWidget);
+      expect(find.textContaining('這一格沒有人'), findsOneWidget);
     });
   });
 }

@@ -4,6 +4,7 @@ import '../models/night_action.dart';
 import '../models/player.dart';
 import '../models/role.dart';
 import '../rules/rule_flags.dart';
+import 'seat_block_reason.dart';
 import 'undo_stack.dart';
 
 /// 放逐投票的階段。
@@ -61,11 +62,18 @@ class ExileVote {
   /// 被放逐的是白痴，翻牌不死。
   bool idiotRevealed = false;
 
-  /// 可以開槍的座次（獵人或狼王被放逐）。
+  /// 可以開槍的座次（獵人、狼王，或學到槍牌的機械狼被放逐）。
   int? shooterSeat;
 
   /// 白天產生的所有死亡，依發生順序。
   final List<Death> deaths = [];
+
+  /// 可以給遺言的人 —— 真的出局的。延後離場的白貓還在場上、之後照常發言，
+  /// 不算；等他延後的死亡生效（[_finishStage]）才輪得到。
+  List<int> get lastWordsSeats => [
+        for (final d in deaths)
+          if (!state.playerAt(d.seat).alive) d.seat,
+      ];
 
   /// 給法官看的說明，例如「3 號是白痴，翻牌不死」。
   final List<String> notes = [];
@@ -142,15 +150,23 @@ class ExileVote {
     votes[seat] = target;
   }
 
+  /// 開槍不能選的座次與原因（見 [dayBlockedSeats]）。
+  Map<int, SeatBlockReason> get shootBlockedSeats => dayBlockedSeats(state);
+
+  /// 開槍可以帶走的座次：存活、而且不在 [shootBlockedSeats] 裡。
+  Set<int> get shootTargets =>
+      _aliveSeats.difference(shootBlockedSeats.keys.toSet());
+
   /// 開槍帶走 [seat]。只在 [ExileStage.shoot] 有效；[seat] 為 null 表示不開。
   void shoot(int? seat) {
     if (stage != ExileStage.shoot) return;
     final shooter = shooterSeat;
     if (shooter == null) return;
+    if (seat != null && !shootTargets.contains(seat)) return;
 
     undoStack.push(state, '開槍', cursor: _cursor);
 
-    if (seat != null && state.playerAt(seat).alive) {
+    if (seat != null) {
       _kill(seat, DeathCause.hunterShot);
       _note('$shooter 號開槍帶走 $seat 號');
       _resolveCharmSuicide(seat);
@@ -289,17 +305,19 @@ class ExileVote {
 
     _resolveCharmSuicide(seat);
 
-    // 槍牌被放逐 → 可以開槍。獵人與狼王被推出去都能開。
-    if (role != null && Roles.gunRoleIds.contains(role.id)) {
+    // 槍牌被放逐 → 可以開槍。獵人與狼王被推出去都能開，
+    // 學到槍牌的機械狼也能（吃推是牠能開槍的兩種死法之一）。
+    if (_mayShootWhenExiled(seat)) {
       shooterSeat = seat;
-      _note('${role.nameZh}（$seat 號）被放逐，可以開槍');
+      _note('$seat 號被放逐，可以開槍');
       stage = ExileStage.shoot;
       return;
     }
 
     // 河豚被放逐 → 問他要不要翻牌帶走投他的人。
     // 只有河豚**自己被放逐**時才有這一步（擔當 2026-09-23 指定）。
-    if (role?.id == Roles.pufferfish.id) {
+    // 學到河豚的機械狼也有（學到就生效，擔當 2026-09-25 指定）。
+    if (_isPufferfish(seat)) {
       if (pufferfishVoters.isEmpty) {
         _note('河豚（$seat 號）被放逐，但沒有人投他，技能無從發動');
       } else {
@@ -312,6 +330,48 @@ class ExileVote {
     _finishStage();
   }
 
+  /// [seat] 被放逐時能不能開槍。
+  ///
+  /// - 獵人、狼王：能 —— 但被轉換的獵人**接刀之後**槍就失效了
+  ///   （白天看 `hasLostSkills`：條件白天才成立的人，要到當晚接刀才轉換）
+  /// - 機械狼學到槍牌：能，吃推是牠能開槍的兩種死法之一。槍**學到就有**，
+  ///   不等隔夜生效（擔當 2026-09-24 指定）
+  ///
+  /// 宣布稿不寫身分 —— 機械狼學到獵人時，寫出來就露餡了。
+  bool _mayShootWhenExiled(int seat) {
+    final role = state.playerAt(seat).role;
+    if (role == null) return false;
+    if (Roles.gunRoleIds.contains(role.id)) {
+      if (state.hasLostSkills(seat)) {
+        // **只記日誌，不進宣布稿** —— [notes] 是法官照著念的稿子，
+        // 念出「已轉換進狼隊」等於當眾公布誰是狼。
+        state.log.add(
+          round: state.dayNumber,
+          isNight: false,
+          kind: LogKind.vote,
+          text: '$seat 號（被轉換的獵人）已接刀，槍已失效，不能開槍',
+        );
+        return false;
+      }
+      return true;
+    }
+    if (role.id == Roles.mechanicWolf.id) {
+      final learned = state.mechanicWolfLearnedRole;
+      return learned != null && Roles.gunRoleIds.contains(learned.id);
+    }
+    return false;
+  }
+
+  /// [seat] 有沒有河豚的技能：河豚本人，或學到河豚的機械狼。
+  ///
+  /// 被轉換的河豚**接刀之後**就沒有這個技能了（喪失尚未使用的原技能）。
+  bool _isPufferfish(int seat) {
+    final role = state.playerAt(seat).role;
+    if (role?.id == Roles.pufferfish.id) return !state.hasLostSkills(seat);
+    return role?.id == Roles.mechanicWolf.id &&
+        state.mechanicWolfLearnedRole?.id == Roles.pufferfish.id;
+  }
+
   /// 這一輪投給河豚的人 —— 也就是翻牌會帶走的名單。
   ///
   /// 取的是**被放逐的那一次**投票紀錄：平票 PK 時 [votes] 已經在重投前清空，
@@ -322,7 +382,7 @@ class ExileVote {
   Set<int> get pufferfishVoters {
     final seat = exiledSeat;
     if (seat == null) return const {};
-    if (state.playerAt(seat).role?.id != Roles.pufferfish.id) return const {};
+    if (!_isPufferfish(seat)) return const {};
     return votes.entries
         .where((e) => e.value == seat && e.key != seat)
         .map((e) => e.key)
@@ -384,22 +444,20 @@ class ExileVote {
     state.playerAt(seat).alive = false;
   }
 
-  /// 放逐投票結束時結清白貓延後的死亡。
+  /// 放逐投票結束時結清白貓延後的死亡 —— 真正的白貓與學到白貓的機械狼都算。
   ///
   /// 所有走到 [ExileStage.done] 的路徑都要經過這裡 —— 漏掉一條，
   /// 白貓就會永遠不死。
   void _finishStage() {
     stage = ExileStage.done;
 
-    if (!state.whiteCatDeathIsDue) return;
-    final seat = state.seatOfRole(Roles.whiteCat.id);
-    final cause = state.whiteCatPendingCause;
-    if (seat == null || cause == null) return;
-    if (!state.playerAt(seat).alive) return;
-
-    state.playerAt(seat).alive = false;
-    deaths.add(Death(seat: seat, cause: cause));
-    _note('白貓（$seat 號）延後的離場生效，正式出局（死因：${cause.labelZh}）');
+    for (final seat in state.catDeathsDue) {
+      final cause = state.pendingCatCause(seat)!;
+      state.playerAt(seat).alive = false;
+      deaths.add(Death(seat: seat, cause: cause));
+      // 宣布稿照寫「白貓」—— 機械狼學到白貓時，桌上看到的就是白貓翻牌。
+      _note('白貓（$seat 號）延後的離場生效，正式出局（死因：${cause.labelZh}）');
+    }
   }
 
   // ---- 撤銷 ----

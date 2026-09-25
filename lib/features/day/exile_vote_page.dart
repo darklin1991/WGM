@@ -96,7 +96,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
       };
 
   Set<int> get _selectable {
-    if (_isShooting) return widget.state.alivePlayers.map((p) => p.seat).toSet();
+    if (_isShooting) return _v.shootTargets;
     if (!_isVoting || _v.focusedTarget == null) return const {};
     return _v.eligibleVoters
         .where((s) => _v.canAssignVote(s) || _v.votes[s] == _v.focusedTarget)
@@ -113,6 +113,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
   }
 
   Map<int, String>? get _disabledReasons {
+    if (_isShooting) return seatBlockReasonsZh(_v.shootBlockedSeats);
     if (!_isVoting) return null;
     final reasons = <int, String>{};
     for (final seat in widget.state.alivePlayers.map((p) => p.seat)) {
@@ -142,7 +143,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
       MaterialPageRoute<void>(
         builder: (inner) => SpeechTimerPage(
           state: widget.state,
-          order: _v.deaths.map((d) => d.seat).toList(),
+          order: _v.lastWordsSeats,
           phase: SpeechPhase.lastWords,
           finishLabel: '遺言結束',
           onFinished: () => Navigator.of(inner).pop(),
@@ -159,12 +160,22 @@ class _ExileVotePageState extends State<ExileVotePage> {
       return;
     }
 
-    setState(() {
+    _advance(() {
       if (_isShooting) {
         _v.shoot(_shotTarget);
       } else {
         _v.next();
       }
+    });
+  }
+
+  /// 推進一步；推到結算完就檢查勝負。
+  ///
+  /// 會推進流程的按鈕（下一步、河豚翻牌）都要走這裡 —— 自己呼叫 `_v` 的話，
+  /// 結算完那一刻就漏掉勝負檢查，之後那一按直接走 `onFinished` 進下一夜。
+  void _advance(VoidCallback action) {
+    setState(() {
+      action();
       _speech = null;
     });
     if (!_v.finished) return;
@@ -269,7 +280,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
                     ),
                   // 遺言由法官決定要不要給 —— 誰有遺言權各家規則不同，
                   // App 不替桌上決定，只在有人出局時提供碼表。
-                  if (_v.finished && _v.deaths.isNotEmpty)
+                  if (_v.finished && _v.lastWordsSeats.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: OutlinedButton.icon(
@@ -279,7 +290,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
                           size: 18,
                         ),
                         label: Text(
-                          '${_v.deaths.map((d) => d.seat).join('、')} 號遺言計時',
+                          '${_v.lastWordsSeats.join('、')} 號遺言計時',
                         ),
                       ),
                     ),
@@ -289,7 +300,7 @@ class _ExileVotePageState extends State<ExileVotePage> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: FilledButton.icon(
-                        onPressed: () => setState(
+                        onPressed: () => _advance(
                           () => _v.revealPufferfish(activate: true),
                         ),
                         icon: const Icon(Icons.flare_rounded, size: 18),

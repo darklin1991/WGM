@@ -3,6 +3,7 @@ import '../models/log_entry.dart';
 import '../models/night_action.dart';
 import '../models/player.dart';
 import '../models/role.dart';
+import 'night_flow.dart';
 
 /// 夜晚結算器。
 ///
@@ -67,15 +68,25 @@ class NightArbitrator {
   /// 甚至是空的（只剩熊自己）。
   ///
   /// 兩側順延到同一個人時只算一位 —— 場上剩三人時會發生。
-  static List<int> bearNeighbors(GameState state) {
-    final bear = state.seatOfRole(Roles.bear.id);
-    if (bear == null || !state.playerAt(bear).alive) return const [];
+  ///
+  /// [seat] 是持有熊技能的人；不給就是熊本人。學到熊的機械狼看的是
+  /// **牠自己的**鄰座。
+  static List<int> bearNeighbors(GameState state, {int? seat}) {
+    final bear = seat ?? state.seatOfRole(Roles.bear.id);
+    if (bear == null) return const [];
+    return aliveNeighbors(state, bear);
+  }
+
+  /// [seat] 左右兩側最近的存活玩家，依座號排序。熊的咆哮與石像鬼的轉換
+  /// 共用這一份走訪。[seat] 本人已出局時回傳空的。
+  static List<int> aliveNeighbors(GameState state, int seat) {
+    if (!state.playerAt(seat).alive) return const [];
 
     final seats = <int>{};
     for (final clockwise in [false, true]) {
-      final seat = state.nextAliveSeat(bear, clockwise: clockwise);
-      // 只剩熊自己時會繞回自己，那不算鄰座。
-      if (seat != null && seat != bear) seats.add(seat);
+      final n = state.nextAliveSeat(seat, clockwise: clockwise);
+      // 只剩自己時會繞回自己，那不算鄰座。
+      if (n != null && n != seat) seats.add(n);
     }
     return seats.toList()..sort();
   }
@@ -86,11 +97,35 @@ class NightArbitrator {
   /// 查驗那邊是第一夜金水、第二夜起查殺，熊沒有這個延遲 —— 所以熊
   /// 比預言家早一夜察覺轉換，這是熊在風聲諜影的價值。
   /// 兩者刻意不同步，不要為了「一致」把它們改成同一套。
-  static bool bearGrowls(GameState state) => bearNeighbors(state).any(
+  ///
+  /// [convertedTonight] 是今晚剛轉換、還沒結算進 [state] 的座次。首夜的轉換
+  /// 要到整夜收完才 `apply`，熊那一步卻排在轉換之後、結算之前 —— 不帶進來，
+  /// 熊首夜就看不到剛發生的轉換。
+  static bool bearGrowls(
+    GameState state, {
+    Set<int> convertedTonight = const {},
+    int? seat,
+  }) =>
+      bearNeighbors(state, seat: seat).any(
         (seat) =>
             state.playerAt(seat).role?.camp == Camp.wolf ||
-            state.isConverted(seat),
+            state.isConverted(seat) ||
+            convertedTonight.contains(seat),
       );
+
+  /// 今晚**實際生效**的轉換 —— 石像鬼選的人，扣掉選到機械狼的那一次。
+  ///
+  /// 擔當 2026-09-25 指定：石像鬼的轉換範圍只擋石像鬼自己人，**機械狼可以被選**。
+  /// 石像鬼與機械狼互不相認，擋掉機械狼那一格等於告訴石像鬼「這個人是狼」。
+  /// 選到了就**悄悄白費**：不記成轉換者，法官照常進行，告知與開刀手勢照樣叫兩次。
+  ///
+  /// [NightActions.gargoyleConvertTargets] 記的是「選了誰」（用來擋撞車），
+  /// 這裡才是「誰真的被轉換」—— 套用結算、熊、告知都從這裡取。
+  static Set<int> effectiveConversions(GameState state, NightActions actions) =>
+      {
+        for (final seat in actions.gargoyleConvertTargets)
+          if (state.playerAt(seat).role?.camp != Camp.wolf) seat,
+      };
 
   /// **預言家**看到的陣營（金水／查殺）。
   ///
@@ -212,6 +247,11 @@ class NightArbitrator {
     // ---- 開槍資格 ----
     var hunterMayShoot = false;
 
+    // 可以開槍的座次。hunterMayShoot／wolfKingMayShoot 只說「有沒有人能開」，
+    // 而且獵人本人與學到槍牌的機械狼共用 hunterMayShoot —— 白天要記
+    // 開槍目標，得知道是誰開的。
+    final shooterSeats = <int>[];
+
     // 獵人本人：死因不是毒、也不是夢死就能開槍。
     //
     // 兩者不可混為一談：「被毒不可開槍」是板子可設定的旗標
@@ -220,12 +260,16 @@ class NightArbitrator {
     final hunterSeat = state.seatOfRole(Roles.hunter.id);
     if (hunterSeat != null && deaths.containsKey(hunterSeat)) {
       final cause = deaths[hunterSeat]!;
-      if (cause == DeathCause.dreamDeath) {
+      if (state.losesSkillsTonight(hunterSeat)) {
+        // 被轉換的獵人接刀那一刻，槍就跟著原技能一起失效了。
+        notes.add('獵人（$hunterSeat 號）已轉換進狼隊，槍已失效');
+      } else if (cause == DeathCause.dreamDeath) {
         notes.add('獵人（$hunterSeat 號）夢死，不可開槍');
       } else if (cause == DeathCause.poison && rules.poisonedHunterCannotShoot) {
         notes.add('獵人（$hunterSeat 號）被毒死，依規則不可開槍');
       } else {
         hunterMayShoot = true;
+        shooterSeats.add(hunterSeat);
         notes.add('獵人（$hunterSeat 號）死亡，可以開槍');
       }
     }
@@ -238,6 +282,7 @@ class NightArbitrator {
     if (wolfKingSeat != null && deaths.containsKey(wolfKingSeat)) {
       if (actions.wolfTargets.contains(wolfKingSeat)) {
         wolfKingMayShoot = true;
+        shooterSeats.add(wolfKingSeat);
         notes.add('狼王（$wolfKingSeat 號）被自刀出局，可以開槍');
       } else {
         notes.add('狼王（$wolfKingSeat 號）未被自刀而出局（被毒），不可開槍');
@@ -246,8 +291,11 @@ class NightArbitrator {
 
     // 機械狼學到槍牌（獵人／狼王）：**只有吃刀或吃推**才能開槍。
     // 吃毒不能開，殉情之類的其他死法也不能 —— 比獵人本人的條件嚴格。
+    //
+    // 槍**學到就有**，不等隔夜生效（擔當 2026-09-24 指定）—— 學習當晚被刀
+    // 也能開，所以要連今晚剛學到的一起看（與結尾那一輪的開槍手勢一致）。
     final mechanicSeat = state.seatOfRole(Roles.mechanicWolf.id);
-    final learnedGun = state.mechanicWolfLearnedRole;
+    final learnedGun = mechanicLearnedRoleNow(state, actions);
     if (mechanicSeat != null &&
         learnedGun != null &&
         gunRoleIds.contains(learnedGun.id) &&
@@ -255,6 +303,7 @@ class NightArbitrator {
       final cause = deaths[mechanicSeat]!;
       if (knifeDeathCauses.contains(cause)) {
         hunterMayShoot = true;
+        shooterSeats.add(mechanicSeat);
         notes.add(
           '機械狼（$mechanicSeat 號，已學到${learnedGun.nameZh}）吃刀出局，可以開槍',
         );
@@ -296,9 +345,18 @@ class NightArbitrator {
     if (actions.mechanicWolfLearnTarget != null) {
       mechanicLearnedRole =
           state.playerAt(actions.mechanicWolfLearnTarget!).role;
+      // 什麼時候生效看學到的身分 —— 被動技能學到就生效，夜間技能隔夜，
+      // 其餘沒有技能。不能寫死「隔夜」，結算頁的資訊卡也照同一份判斷寫。
+      final timing = mechanicLearnedRole == null
+          ? ''
+          : switch (NightFlow.mechanicSkillTimingOf(mechanicLearnedRole)) {
+              MechanicSkillTiming.nextNight => '，隔夜起生效',
+              MechanicSkillTiming.immediate => '，學到就生效',
+              MechanicSkillTiming.none => '，沒有技能，只套用身分',
+            };
       notes.add(
         '機械狼學習 ${actions.mechanicWolfLearnTarget} 號'
-        '（${mechanicLearnedRole?.nameZh ?? "身分未登記"}），隔夜起生效',
+        '（${mechanicLearnedRole?.nameZh ?? "身分未登記"}）$timing',
       );
     }
 
@@ -331,6 +389,30 @@ class NightArbitrator {
       }
     }
 
+    // 白貓不會當場離場 —— apply 會把他的死亡延到今天的放逐投票結束。
+    // 結算頁與日誌要照實講「翻牌、還在場」，不能當成一般的出局公布。
+    // 學到白貓的機械狼也一樣（學到就生效，所以連今晚剛學到的一起看）。
+    final whiteCatDeferred = <int>[];
+    final catSeat = state.seatOfRole(Roles.whiteCat.id);
+    // 被轉換的白貓接刀之後（含今晚接刀）就沒有這個技能了。
+    if (catSeat != null &&
+        deaths.containsKey(catSeat) &&
+        !state.losesSkillsTonight(catSeat) &&
+        state.whiteCatPendingCause == null) {
+      whiteCatDeferred.add(catSeat);
+    }
+    if (mechanicSeat != null &&
+        deaths.containsKey(mechanicSeat) &&
+        mechanicLearnedRoleNow(state, actions)?.id == Roles.whiteCat.id &&
+        state.mechanicWhiteCatPendingCause == null) {
+      whiteCatDeferred.add(mechanicSeat);
+    }
+    whiteCatDeferred.sort();
+    for (final seat in whiteCatDeferred) {
+      // 宣布稿照寫「白貓」—— 機械狼學到白貓時，桌上看到的就是白貓翻牌。
+      notes.add('白貓（$seat 號）翻牌，要到今天的放逐投票結束才真正出局');
+    }
+
     final sorted = deaths.keys.toList()..sort();
 
     return NightOutcome(
@@ -342,6 +424,8 @@ class NightArbitrator {
       seerSawWolf: seerSawWolf,
       hunterMayShoot: hunterMayShoot,
       wolfKingMayShoot: wolfKingMayShoot,
+      shooterSeats: shooterSeats..sort(),
+      whiteCatDeferredSeats: whiteCatDeferred,
       psychicResult: psychicResult,
       mechanicLearnedRole: mechanicLearnedRole,
       mechanicSeerTarget: mechanicSeerTarget,
@@ -365,33 +449,68 @@ class NightArbitrator {
   ///
   /// 第 1 與第 2 看似矛盾，其實不是：免疫擋的是**別人造成的**傷害，
   /// 夢死是被攝這件事本身造成的，不在免疫範圍內。
+  ///
+  /// 學到攝夢人的機械狼有**自己的**夢遊者，與原攝夢人各自獨立。兩人的夢遊者
+  /// 要**一起**跑完每一段再進下一段 —— 否則甲的連帶先判了，乙的免疫才把
+  /// 甲救回來，順序一換結果就不同。
   void _resolveDream({
     required GameState state,
     required NightActions actions,
     required Map<int, DeathCause> deaths,
     required List<String> notes,
   }) {
+    final dreams = <({int weaver, int dreamer, int? last, String who})>[];
+    final weaver = state.seatOfRole(Roles.dreamWeaver.id);
     final dreamer = actions.dreamTarget;
-    if (dreamer == null) return;
+    if (weaver != null && dreamer != null) {
+      dreams.add((
+        weaver: weaver,
+        dreamer: dreamer,
+        last: state.lastDreamTarget,
+        who: '攝夢人（$weaver 號）',
+      ));
+    }
+    final mechanic = state.seatOfRole(Roles.mechanicWolf.id);
+    final mechanicDreamer = actions.mechanicDreamTarget;
+    if (mechanic != null && mechanicDreamer != null) {
+      dreams.add((
+        weaver: mechanic,
+        dreamer: mechanicDreamer,
+        last: state.lastMechanicDreamTarget,
+        who: '機械狼（$mechanic 號，攝夢人）',
+      ));
+    }
+    if (dreams.isEmpty) return;
 
     // 1. 免疫：今晚落在夢遊者身上的死亡全部取消。
-    final blocked = deaths.remove(dreamer);
-    if (blocked != null) {
-      notes.add('$dreamer 號在夢遊，免疫今晚的${blocked.labelZh}');
+    for (final d in dreams) {
+      final blocked = deaths.remove(d.dreamer);
+      if (blocked != null) {
+        notes.add('${d.dreamer} 號在夢遊，免疫今晚的${blocked.labelZh}');
+      }
     }
 
-    // 2. 夢死：連續兩晚被攝。擋不住，所以直接寫進死亡名單。
-    if (dreamer == state.lastDreamTarget) {
-      deaths[dreamer] = DeathCause.dreamDeath;
-      notes.add('$dreamer 號連續兩晚被攝，夢死（擋不住，也不能開槍）');
-      return;
+    // 2. 夢死：連續兩晚被同一位攝。擋不住，所以直接寫進死亡名單。
+    for (final d in dreams) {
+      if (d.dreamer == d.last) {
+        deaths[d.dreamer] = DeathCause.dreamDeath;
+        notes.add('${d.dreamer} 號連續兩晚被攝，夢死（擋不住，也不能開槍）');
+      }
     }
 
-    // 3. 攝夢人今晚出局 → 當晚的夢遊者一併死亡。
-    final weaver = state.seatOfRole(Roles.dreamWeaver.id);
-    if (weaver != null && deaths.containsKey(weaver)) {
-      deaths[dreamer] = DeathCause.dreamDeath;
-      notes.add('攝夢人（$weaver 號）出局，夢遊中的 $dreamer 號一併死亡');
+    // 3. 攝夢的人今晚出局 → 當晚的夢遊者一併死亡。重複到沒有新的死亡 ——
+    // 一併死掉的夢遊者若正是另一位攝夢的人，他的夢遊者也要跟著死。
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (final d in dreams) {
+        if (deaths.containsKey(d.dreamer) || !deaths.containsKey(d.weaver)) {
+          continue;
+        }
+        deaths[d.dreamer] = DeathCause.dreamDeath;
+        notes.add('${d.who}出局，夢遊中的 ${d.dreamer} 號一併死亡');
+        changed = true;
+      }
     }
   }
 
@@ -559,17 +678,19 @@ class NightArbitrator {
 
     // 覺醒石像鬼的轉換：只有首夜會有，寫進去就固定了。
     //
-    // 兩隻選到同一人時 `gargoyleConvertTargets` 本來就只有一筆 ——
-    // 「只有那一個人轉換進狼隊，另一次白費」（擔當指定）自然成立。
-    if (actions.gargoyleConvertTargets.isNotEmpty &&
-        state.conversionNight == null) {
-      state.convertedSeats.addAll(actions.gargoyleConvertTargets);
+    // 兩隻一定各選一位、不會撞車 —— 擋在輸入階段
+    //（`SeatBlockReason.alreadyConverted`）。選到機械狼的那一次悄悄白費，
+    // 不記成轉換者（見 [effectiveConversions]）。
+    final converted = effectiveConversions(state, actions);
+    if (converted.isNotEmpty && state.conversionNight == null) {
+      state.convertedSeats.addAll(converted);
       state.conversionNight = actions.night;
     }
 
     // 攝夢人：記住今晚攝的是誰，明晚才判斷得出「連續兩晚」。
     // **每晚都要更新**，包含沒攝（null）—— 中間斷一晚就不算連續。
     state.lastDreamTarget = actions.dreamTarget;
+    state.lastMechanicDreamTarget = actions.mechanicDreamTarget;
 
     // 暗戀者：首夜選定，**當下的陣營就固定下來**（擔當 2026-09-22 指定）。
     //
@@ -644,10 +765,19 @@ class NightArbitrator {
       action('女巫用毒藥毒 ${actions.witchPoisonTarget} 號',
           [actions.witchPoisonTarget!]);
     }
+    if (actions.dreamTarget != null) {
+      action('攝夢人攝 ${actions.dreamTarget} 號', [actions.dreamTarget!]);
+    }
 
     // ---- 機械狼 ----
     if (outcome.mechanicLearnedRole != null) {
-      action('機械狼學到${outcome.mechanicLearnedRole!.nameZh}（隔夜生效）');
+      final learned = outcome.mechanicLearnedRole!;
+      final timing = switch (NightFlow.mechanicSkillTimingOf(learned)) {
+        MechanicSkillTiming.nextNight => '隔夜生效',
+        MechanicSkillTiming.immediate => '學到就生效',
+        MechanicSkillTiming.none => '沒有技能，只套用身分',
+      };
+      action('機械狼學到${learned.nameZh}（$timing）');
     }
     if (actions.mechanicGuardTarget != null) {
       action('機械狼（守衛）守 ${actions.mechanicGuardTarget} 號',
@@ -656,6 +786,23 @@ class NightArbitrator {
     if (actions.mechanicPoisonTarget != null) {
       action('機械狼（女巫）毒 ${actions.mechanicPoisonTarget} 號',
           [actions.mechanicPoisonTarget!]);
+    }
+    if (actions.mechanicDreamTarget != null) {
+      action('機械狼（攝夢人）攝 ${actions.mechanicDreamTarget} 號',
+          [actions.mechanicDreamTarget!]);
+    }
+
+    // ---- 覺醒石像鬼的轉換 ----
+    final converted = effectiveConversions(state, actions);
+    for (final seat in actions.gargoyleConvertTargets.toList()..sort()) {
+      final role = state.playerAt(seat).role?.nameZh ?? '未知';
+      action(
+        converted.contains(seat)
+            ? '石像鬼轉換 $seat 號（$role）'
+            // 只有法官看得到 —— 石像鬼不知道自己選到了機械狼。
+            : '石像鬼選了 $seat 號（$role），轉換無效',
+        [seat],
+      );
     }
 
     // ---- 情報 ----
@@ -705,9 +852,14 @@ class NightArbitrator {
           round: night,
           isNight: true,
           kind: LogKind.death,
-          text: '${d.seat} 號出局'
-              '（${state.playerAt(d.seat).role?.nameZh ?? "未知"}・'
-              '${d.cause.labelZh}）',
+          text: outcome.whiteCatDeferredSeats.contains(d.seat)
+              // 真正離場時 ExileVote._finishStage 會再記一筆「正式出局」——
+              // 這裡寫成出局的話，復盤會看到同一個人死兩次。
+              ? '${d.seat} 號翻牌（白貓・${d.cause.labelZh}），'
+                  '今天的放逐投票結束才離場'
+              : '${d.seat} 號出局'
+                  '（${state.playerAt(d.seat).role?.nameZh ?? "未知"}・'
+                  '${d.cause.labelZh}）',
           seats: [d.seat],
         );
       }
@@ -743,14 +895,40 @@ class NightArbitrator {
   /// 這是**預告**狀態（獵人還活著時給的手勢），與
   /// [NightOutcome.hunterMayShoot]（結算後、獵人確實死亡才成立）不同。
   ///
-  /// 獵人排在夜晚順序的最後，就是為了這個：法官必須先收完女巫的毒藥，
+  /// 獵人排在女巫之後，就是為了這個：法官必須先收完女巫的毒藥，
   /// 才知道該給拇指向上還是向下。
-  bool hunterCanShootTonight(GameState state, NightActions actions) {
+  bool hunterCanShootTonight(GameState state, NightActions actions) =>
+      hunterGunForecast(state, actions).canShoot;
+
+  /// 獵人的開槍預告：能不能開，不能的話今晚會死於什麼。
+  ///
+  /// 手勢卡兩樣都要，所以一起算 —— **只跑一次** [settle]。
+  GunForecast hunterGunForecast(GameState state, NightActions actions) {
     final seat = state.seatOfRole(Roles.hunter.id);
-    if (seat == null) return false;
-    if (!state.playerAt(seat).alive) return false;
-    if (!_poisonedTonight(state, actions, seat)) return true;
-    return !state.preset.rules.poisonedHunterCannotShoot;
+    if (seat == null || !state.playerAt(seat).alive) {
+      return (canShoot: false, blockedBy: null);
+    }
+    final blocked = gunBlockedTonight(state, actions, seat);
+    return (canShoot: blocked == null, blockedBy: blocked);
+  }
+
+  /// [seat] 今晚若出局而且**不能開槍**，是死於什麼；槍今晚完好時回傳 null。
+  ///
+  /// 直接拿目前收到的行動試算一次 [settle]，看他今晚的結局 —— 所以手勢與
+  /// 天亮後的結算永遠一致：毒、夢死（連兩晚被攝、攝夢人出局帶走夢遊者）、
+  /// 被轉換者喪失技能，一條都不會漏。以前只看毒，獵人會夢死卻比「可開槍」。
+  ///
+  /// 今晚活下來就算槍完好 —— 例如被毒但正在夢遊（免疫），毒沒有作用。
+  /// [settle] 不動局面，可以放心試算。
+  DeathCause? gunBlockedTonight(
+    GameState state,
+    NightActions actions,
+    int seat,
+  ) {
+    final outcome = settle(state, actions);
+    final death = outcome.deaths.where((d) => d.seat == seat).firstOrNull;
+    if (death == null) return null;
+    return outcome.shooterSeats.contains(seat) ? null : death.cause;
   }
 
   /// 機械狼目前的身分 —— **含本夜剛學到、還沒套用到狀態的**。
@@ -768,27 +946,24 @@ class NightArbitrator {
 
   /// 機械狼（學到槍牌）今晚若出局，能不能開槍 —— 法官給手勢用。
   ///
-  /// 機械狼的條件比獵人嚴格：**只有吃刀或吃推才能開槍**。被毒不行，
-  /// 所以今晚只要中了毒，手勢就要給「不可開槍」。
-  bool mechanicCanShootTonight(GameState state, NightActions actions) {
-    final seat = state.seatOfRole(Roles.mechanicWolf.id);
-    if (seat == null) return false;
-    if (!state.playerAt(seat).alive) return false;
-    final learned = mechanicLearnedRoleNow(state, actions);
-    if (learned == null || !gunRoleIds.contains(learned.id)) return false;
-    return !_poisonedTonight(state, actions, seat);
-  }
+  /// 機械狼的條件比獵人嚴格：**只有吃刀或吃推才能開槍**。被毒、夢死、殉情
+  /// 都不行 —— 判斷同樣交給 [gunBlockedTonight] 試算。
+  bool mechanicCanShootTonight(GameState state, NightActions actions) =>
+      mechanicGunForecast(state, actions).canShoot;
 
-  /// [seat] 今晚是否被下了毒（且沒有被機械狼的守護反彈掉）。
-  bool _poisonedTonight(GameState state, NightActions actions, int seat) {
-    final hit = actions.witchPoisonTarget == seat ||
-        actions.mechanicPoisonTarget == seat;
-    if (!hit) return false;
-    // 被機械狼守住的話毒會反彈，等於沒中毒。
-    if (actions.mechanicGuardTarget == seat &&
-        state.preset.rules.mechanicGuardReflectsPoison) {
-      return false;
-    }
-    return true;
+  /// 機械狼（學到槍牌）的開槍預告，同 [hunterGunForecast]，只跑一次 [settle]。
+  /// 沒學到槍牌就沒有槍，不必試算。
+  GunForecast mechanicGunForecast(GameState state, NightActions actions) {
+    const noGun = (canShoot: false, blockedBy: null);
+    final seat = state.seatOfRole(Roles.mechanicWolf.id);
+    if (seat == null || !state.playerAt(seat).alive) return noGun;
+    final learned = mechanicLearnedRoleNow(state, actions);
+    if (learned == null || !gunRoleIds.contains(learned.id)) return noGun;
+    final blocked = gunBlockedTonight(state, actions, seat);
+    return (canShoot: blocked == null, blockedBy: blocked);
   }
 }
+
+/// 開槍手勢的預告：今晚若出局能不能開槍，不能的話是死於什麼
+/// （[blockedBy] 只在「會死而且不能開」時有值，給手勢卡寫說明）。
+typedef GunForecast = ({bool canShoot, DeathCause? blockedBy});

@@ -8,6 +8,7 @@ import '../../core/models/night_action.dart';
 import '../../core/models/role.dart';
 import '../../shared/theme.dart';
 import '../day/badge_succession_page.dart';
+import '../day/night_death_shot_page.dart';
 import '../day/speech_order_page.dart';
 import '../day/speech_timer_page.dart';
 import '../review/game_over_page.dart';
@@ -33,6 +34,14 @@ class NightResultPage extends StatelessWidget {
   final List<int> autoFilledVillagers;
 
   WinCheck get _win => WinChecker.check(state);
+
+  static const _catDeferred = '（翻牌，今天的放逐投票結束才離場）';
+
+  /// 可以給遺言的人 —— 延後離場的白貓還在場上，今天照常發言，不算。
+  List<int> get _lastWordsSeats => [
+        for (final seat in outcome.deadSeats)
+          if (!outcome.whiteCatDeferredSeats.contains(seat)) seat,
+      ];
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +95,8 @@ class NightResultPage extends StatelessWidget {
                         child: Text(
                           '${d.seat} 號 · '
                           '${state.playerAt(d.seat).role?.nameZh ?? "未知"} · '
-                          '${d.cause.labelZh}',
+                          '${d.cause.labelZh}'
+                          '${outcome.whiteCatDeferredSeats.contains(d.seat) ? _catDeferred : ""}',
                           style: TextStyle(
                             fontSize: 14,
                             color: scheme.onSurfaceVariant,
@@ -100,23 +110,17 @@ class NightResultPage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // ---- 獵人開槍 ----
-          if (outcome.hunterMayShoot)
+          // ---- 開槍 ----
+          // 獵人、被自刀的狼王、學到槍牌且吃刀的機械狼。為什麼能開寫在
+          // 下方的裁決說明裡；開槍目標在下一頁記。狼王不給夜間手勢 ——
+          // 狼隊自己知道有沒有自刀，白天起來直接發動。
+          for (final seat in outcome.shooterSeats)
             _InfoCard(
               icon: Icons.crisis_alert_rounded,
               iconColor: WgmTheme.wolfColor,
-              title: '獵人可以開槍',
-              body: '獵人已出局且死因不是毒，請詢問是否開槍帶人。',
-            ),
-
-          // ---- 狼王開槍 ----
-          // 狼王不給夜間手勢 —— 狼隊自己知道有沒有自刀，白天起來直接發動。
-          if (outcome.wolfKingMayShoot)
-            _InfoCard(
-              icon: Icons.crisis_alert_rounded,
-              iconColor: WgmTheme.wolfColor,
-              title: '狼王可以開槍',
-              body: '狼王被自刀出局，白天可直接發動技能帶走一名玩家。',
+              title: '$seat 號'
+                  '（${state.playerAt(seat).role?.nameZh ?? "?"}）可以開槍',
+              body: '公布死訊後，按下方的開槍鍵記下他要帶走誰。',
             ),
 
           // ---- 預言家查驗結果 ----
@@ -149,7 +153,7 @@ class NightResultPage extends StatelessWidget {
               icon: Icons.memory_rounded,
               iconColor: WgmTheme.wolfColor,
               title: '機械狼學習了 ${outcome.mechanicLearnedRole!.nameZh}',
-              body: '技能自**下一夜**起生效，整局只能學這一次。',
+              body: mechanicSkillTimingText(outcome.mechanicLearnedRole!),
             ),
           if (outcome.mechanicSeerTarget != null)
             _InfoCard(
@@ -296,17 +300,23 @@ class NightResultPage extends StatelessWidget {
             // 遺言由法官決定要不要給 —— 誰有遺言權各家規則不同
             // （常見的是首夜死者與被放逐者才有），App 不替桌上決定，
             // 只在有死者時提供碼表。
-            if (outcome.deadSeats.isNotEmpty) ...[
+            if (_lastWordsSeats.isNotEmpty) ...[
               OutlinedButton.icon(
                 onPressed: () => _toLastWords(context),
                 icon: const Icon(Icons.record_voice_over_outlined, size: 18),
-                label: Text('${outcome.deadSeats.join('、')} 號遺言計時'),
+                label: Text('${_lastWordsSeats.join('、')} 號遺言計時'),
               ),
               const SizedBox(height: 8),
             ],
 
-            // 警長昨晚也死了 → 下一站是警徽流，按鈕要講實話。
-            if (BadgeSuccession.isDue(state))
+            // 下一站是開槍或警徽流時，按鈕要講實話。
+            if (outcome.shooterSeats.isNotEmpty)
+              FilledButton.icon(
+                onPressed: () => _toSpeechOrder(context),
+                icon: const Icon(Icons.crisis_alert_rounded),
+                label: Text('${outcome.shooterSeats.join('、')} 號開槍'),
+              )
+            else if (BadgeSuccession.isDue(state))
               FilledButton.icon(
                 onPressed: () => _toSpeechOrder(context),
                 icon: const Icon(Icons.shield_rounded),
@@ -320,8 +330,7 @@ class NightResultPage extends StatelessWidget {
               ),
             const SizedBox(height: 8),
             Text(
-              '接著是發言順序 → 放逐投票 → 下一夜。'
-              '發言計時與騎士決鬥尚未實作。',
+              '接著是發言順序 → 逐人發言 → 放逐投票 → 下一夜。',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
@@ -338,7 +347,7 @@ class NightResultPage extends StatelessWidget {
       MaterialPageRoute<void>(
         builder: (inner) => SpeechTimerPage(
           state: state,
-          order: outcome.deadSeats,
+          order: _lastWordsSeats,
           phase: SpeechPhase.lastWords,
           finishLabel: '遺言結束',
           onFinished: () => Navigator.of(inner).pop(),
@@ -361,14 +370,25 @@ class NightResultPage extends StatelessWidget {
   ///
   /// 警長昨晚出局時，警徽流要插在發言順序**之前** —— 警左警右由警長決定，
   /// 得先知道現在誰是警長。
+  ///
+  /// 夜死的槍牌開槍再排在警徽流**之前**（擔當 2026-09-24 指定）——
+  /// 獵人可能帶走的就是警長。`routeIfDue` 的 `next` 是延遲求值的，
+  /// 所以警徽流要不要走，是開完槍之後才判斷。
+  ///
+  /// 發言順序的「單死／雙死」**連天亮後被槍帶走的人也算**（擔當 2026-09-24
+  /// 指定）—— 獵人夜死又帶走一人，就是雙死，從警長算起。
   void _toSpeechOrder(BuildContext context) {
     Navigator.of(context).pushReplacement(
-      BadgeSuccessionPage.routeIfDue(
+      NightDeathShotPage.routeIfDue(
         state,
-        next: () => SpeechOrderPage.routeThenExile(
+        shooters: outcome.shooterSeats,
+        next: (taken) => BadgeSuccessionPage.routeIfDue(
           state,
-          outcome.deadSeats,
-          nextNight: () => NightFlowPage.route(state),
+          next: () => SpeechOrderPage.routeThenExile(
+            state,
+            [...outcome.deadSeats, ...taken],
+            nextNight: () => NightFlowPage.route(state),
+          ),
         ),
       ),
     );

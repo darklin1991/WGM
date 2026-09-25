@@ -23,8 +23,8 @@
     "bear",
     "witch",
     "hunter",
-    "psychic",
-    "seer"
+    "seer",
+    "psychic"
   ],
   "rules": {
     "guardHealKills": true,

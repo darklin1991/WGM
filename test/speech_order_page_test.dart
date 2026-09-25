@@ -102,7 +102,7 @@ void main() {
     }
     await pump(tester, state: state, deceased: [9, 10]);
 
-    expect(find.textContaining('昨晚死了 2 位'), findsOneWidget);
+    expect(find.textContaining('昨晚到現在死了 2 位'), findsOneWidget);
     expect(find.text('6 → 7 → 8 → 11 → 12 → 1 → 2 → 3 → 4 → 5'), findsOneWidget);
   });
 

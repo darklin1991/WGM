@@ -266,6 +266,14 @@ abstract final class Roles {
   /// 槍牌：死亡時可以開槍帶人的身分。機械狼學到這些才拿得到槍。
   static const gunRoleIds = <String>{'hunter', 'wolfKing'};
 
+  /// 出局時才觸發的被動技能 —— 機械狼學到這些**學到就生效**，不等隔夜
+  /// （擔當 2026-09-24 指定槍如此，河豚與白貓比照）。
+  static const mechanicPassiveIds = <String>{
+    ...gunRoleIds,
+    'pufferfish',
+    'whiteCat',
+  };
+
   static final Map<String, Role> _byId = {
     for (final r in all) r.id: r,
   };

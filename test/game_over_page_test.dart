@@ -189,5 +189,58 @@ void main() {
       expect(find.byType(GameOverPage), findsNothing);
       expect(done, [true]);
     });
+
+    // 翻牌帶走是另一顆按鈕，不經過「下一步」—— 以前結算完不會檢查勝負，
+    // 按鈕照樣顯示「進入下一夜」。
+    testWidgets('河豚翻牌帶走最後的狼 → 直接進結果頁', (tester) async {
+      final done = <bool>[];
+      final state = GameState(
+        preset: Preset.fromJson(
+          const {
+            'presetId': 'pf',
+            'name': '河豚測試板',
+            'playerCount': 12,
+            'roles': [
+              {'role': 'wolf', 'count': 2},
+              {'role': 'pufferfish', 'count': 1},
+              {'role': 'seer', 'count': 1},
+              {'role': 'witch', 'count': 1},
+              {'role': 'hunter', 'count': 1},
+              {'role': 'villager', 'count': 6},
+            ],
+            'nightOrder': ['wolf', 'witch', 'seer'],
+          },
+          sourceName: 'pf.json',
+        ),
+      );
+      // 1-2 狼、3 河豚、4 預言家、5 女巫、6 獵人、7-12 平民。
+      final roles = <Role>[
+        Roles.wolf,
+        Roles.wolf,
+        Roles.pufferfish,
+        Roles.seer,
+        Roles.witch,
+        Roles.hunter,
+      ];
+      for (var seat = 1; seat <= 12; seat++) {
+        state.playerAt(seat).role =
+            seat <= roles.length ? roles[seat - 1] : Roles.villager;
+      }
+      state.dayNumber = 2;
+      await pump(tester, state, finished: done);
+
+      await _tapChip(tester, 3);
+      for (final voter in [1, 2]) {
+        await _tapSeat(tester, voter);
+      }
+      await _tapText(tester, '算票');
+      await _tapText(tester, '翻牌帶走 1、2 號');
+
+      expect(state.playerAt(1).alive, isFalse);
+      expect(state.playerAt(2).alive, isFalse);
+      expect(find.byType(GameOverPage), findsOneWidget);
+      expect(find.text('好人勝'), findsOneWidget);
+      expect(done, isEmpty, reason: '分出勝負就不該再呼叫進下一夜');
+    });
   });
 }

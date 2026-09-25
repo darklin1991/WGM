@@ -4,7 +4,10 @@ import '../models/night_action.dart';
 import '../models/role.dart';
 import 'night_arbitrator.dart';
 import 'night_flow.dart';
+import 'seat_block_reason.dart';
 import 'undo_stack.dart';
+
+export 'seat_block_reason.dart';
 
 /// 一個步驟內的子階段。
 enum NightSub {
@@ -42,7 +45,7 @@ enum NightSub {
   /// 熊：法官給「咆哮／不咆哮」—— 兩側鄰座裡有沒有狼。
   bearGrowl,
 
-  /// 覺醒石像鬼轉換相鄰座次的一位。**逐隻問過去**，一隻一次。
+  /// 覺醒石像鬼轉換一位。**逐隻問過去**，一隻一次；兩隻的鄰座都能選。
   gargoyleConvert,
 
   /// 夜晚結尾：法官告知機械狼學到的身分，並給開槍手勢。
@@ -59,32 +62,20 @@ enum NightSub {
   ///
   /// 直接跳過會讓玩家從流程長度聽出誰死光了。
   passThrough,
-}
 
-/// 座次不可選的原因。
-///
-/// 只回傳原因本身，顯示文字由 UI 決定 —— 引擎不碰呈現。
-enum SeatBlockReason {
-  /// 守衛昨晚守過這位（不可連守同一人）。
-  guardedLastNight,
+  /// 第二夜起，轉換者那一輪的第一段：法官比手勢告知今晚有沒有刀。
+  ///
+  /// 一格一位，叫滿石像鬼的數量。那一位已出局（或當初選到機械狼、轉換白費）
+  /// 照樣喊、照樣停頓（見 [NightSkill.convertedTurn]）。
+  convertedKnifeGesture,
 
-  /// 狼美人昨晚魅惑過這位（不可連續兩晚魅惑同一人）。
-  charmedLastNight,
+  /// 有刀的轉換者選刀口。
+  convertedKnife,
 
-  /// 狼美人不能被自刀。
-  wolfBeautySelfKill,
-
-  /// 機械狼不能學自己。
-  mechanicSelfLearn,
-
-  /// 暗戀者不能暗戀自己。
-  secretAdmirerSelf,
-
-  /// 白貓已翻牌、正在延後離場中 —— 這段期間禁止成為技能目標。
-  whiteCatPending,
-
-  /// 本局不可同夜雙藥。
-  witchDualUse,
+  /// 首夜最後：逐一叫醒被轉換者，告知他已轉換進狼隊。
+  ///
+  /// 叫的次數固定是石像鬼的數量（見 [NightSkill.convertedNotify]）。
+  convertedNotify,
 }
 
 /// [NightSub.inspectResult] 那一頁的內容：法官要比給查驗者看的答案。
@@ -248,19 +239,25 @@ class NightFlowMachine {
   /// 流程長度聽出誰出局了 —— 所以照喊不誤，只是沒有東西要收。
   bool isPassThrough(NightStep s) => !isFirstNight && allRolesDead(s);
 
+  /// 這一步是被轉換者喪失原技能後的走過場 —— 人還活著、會睜眼，
+  /// 與「角色全滅」的走過場說明不同，畫面要分開寫。
+  bool get isLostSkillsStep =>
+      !isFirstNight && step.skill == NightSkill.none && !allRolesDead(step);
+
   NightSub _initialSubFor(NightStep s) {
+    // 轉換者那一輪沒有固定角色（roles 是空的），不能拿「角色全滅」判斷 ——
+    // 每一格自己看有沒有人，見 [convertedTurnSeat]。
+    if (s.skill == NightSkill.convertedTurn) {
+      return NightSub.convertedKnifeGesture;
+    }
     if (isPassThrough(s)) {
       // 機械狼學到狼人時，狼隊這一格就是牠的第二刀 ——
       // 第一刀在自己那一輪（夜晚開頭）已經砍過了。
       if (s.skill == NightSkill.wolfKill && hasExtraKnife) {
         return NightSub.secondKnife;
       }
-      // 石像鬼全滅、機械狼也出局，而且只剩一位被轉換者 →
-      // 狼刀移交給他（開刀順位第 3 順位）。狼隊這一格照樣是開刀那一步，
-      // 只是持刀的人換了。
-      if (s.skill == NightSkill.wolfKill && convertedTakesKnife) {
-        return NightSub.chooseTarget;
-      }
+      // 被轉換者接刀時（開刀順位第 3 順位），刀在他自己那一輪
+      //（[NightSkill.convertedTurn]）開，狼隊這一格照樣走過場。
       return NightSub.passThrough;
     }
     if (isFirstNight && needsRegistration(s)) return NightSub.registerSeats;
@@ -333,7 +330,8 @@ class NightFlowMachine {
       round: night,
       isNight: true,
       kind: LogKind.info,
-      text: '熊的鄰座是 ${neighbours.join("、")} 號，'
+      text: '${step.byMechanicWolf ? "機械狼（熊）" : "熊"}的鄰座是 '
+          '${neighbours.join("、")} 號，'
           '${bearGrowls ? "咆哮（有狼）" : "不咆哮（沒有狼）"}',
       seats: neighbours,
     );
@@ -352,43 +350,91 @@ class NightFlowMachine {
     return _gargoyleIndex < seats.length ? seats[_gargoyleIndex] : null;
   }
 
-  /// 目前這隻石像鬼可以轉換的對象 —— **只有牠的左右鄰座**。
+  /// 目前這隻石像鬼的轉換範圍 —— **兩隻石像鬼的左右鄰座都算**
+  /// （擔當 2026-09-25 指定：可以選另一隻石像鬼旁邊的位置）。
   ///
-  /// 座次是環狀的，鄰座取的是最近的兩位存活玩家（與熊同一套走訪）。
-  /// 另一隻石像鬼若剛好是鄰座也照樣列出來 —— 規則沒禁止，
-  /// 只是轉換自己人沒有意義，由法官自己決定。
-  Set<int> get gargoyleNeighbors {
-    final seat = currentGargoyleSeat;
-    if (seat == null) return const {};
-    final seats = <int>{};
-    for (final clockwise in [false, true]) {
-      final n = state.nextAliveSeat(seat, clockwise: clockwise);
-      if (n != null && n != seat) seats.add(n);
-    }
-    return seats;
+  /// 兩隻互認、一起行動，所以範圍共用。座次是環狀的，鄰座取的是最近的
+  /// 兩位存活玩家（與熊同一套走訪）。狼隊自己人與另一隻已經轉換的人
+  /// 也在範圍裡，由 [blockedSeats] 擋掉並標出原因。
+  Set<int> get gargoyleConvertRange {
+    if (currentGargoyleSeat == null) return const {};
+    return {
+      for (final gargoyle in gargoyleSeats)
+        ...NightArbitrator.aliveNeighbors(state, gargoyle),
+    };
   }
 
-  /// 這一夜到目前為止已經轉換成功的座次。
-  Set<int> get convertedTonight => actions.gargoyleConvertTargets;
+  /// 這一夜到目前為止**實際生效**的轉換 —— 選到機械狼的那一次不算
+  ///（見 `NightArbitrator.effectiveConversions`）。
+  Set<int> get convertedTonight =>
+      NightArbitrator.effectiveConversions(state, actions);
 
-  /// 今晚的狼刀是否已經移交給被轉換者（開刀順位第 3 順位）。
-  bool get convertedTakesKnife => state.convertedKnifeHolder != null;
+  // ---- 轉換者（首夜最後的告知、第二夜起的開刀手勢）----
+  //
+  // 沿用 [_gargoyleIndex] 當格數：一隻石像鬼最多轉換一人，所以格數＝石像鬼數，
+  // 撤銷游標也早就記著它。
+
+  /// 要叫幾次 —— 固定是石像鬼的數量，不看實際轉換了幾位。
+  int get convertedNotifySlots => gargoyleSeats.length;
+
+  /// 第 [index] 格對應的座次；這一格沒有人時為 null。
+  static int? _slotSeat(Iterable<int> seats, int index) {
+    final sorted = seats.toList()..sort();
+    return index < sorted.length ? sorted[index] : null;
+  }
+
+  /// 現在叫的是第幾位（1 起算）；不在那一步時為 null。
+  int? get convertedNotifyOrdinal =>
+      _sub == NightSub.convertedNotify ? _gargoyleIndex + 1 : null;
+
+  /// 這一格要告知的被轉換者。那隻石像鬼選到機械狼（轉換悄悄白費）時是
+  /// null —— 照樣喊、照樣停頓，沒有人睜眼。
+  int? get convertedNotifySeat => _sub == NightSub.convertedNotify
+      ? _slotSeat(convertedTonight, _gargoyleIndex)
+      : null;
+
+  bool get _inConvertedTurn =>
+      _sub == NightSub.convertedKnifeGesture || _sub == NightSub.convertedKnife;
+
+  /// 開刀手勢現在叫的是第幾位（1 起算）；不在那一輪時為 null。
+  int? get convertedTurnOrdinal => _inConvertedTurn ? _gargoyleIndex + 1 : null;
+
+  /// 這一格的被轉換者 —— **依座號排，出局的也佔一格**，每晚同一位對到同一格。
+  /// 那隻石像鬼當初選到機械狼（轉換白費）時為 null。
+  int? get convertedTurnSeat =>
+      _inConvertedTurn ? _slotSeat(state.convertedSeats, _gargoyleIndex) : null;
+
+  /// 這一格的人還活著、會睜眼。出局或沒有人時照樣喊，只是沒有人睜眼。
+  bool get convertedTurnSeatAlive {
+    final seat = convertedTurnSeat;
+    return seat != null && state.playerAt(seat).alive;
+  }
+
+  /// 這一格的人今晚有刀 —— 石像鬼與機械狼都出局、而且只剩他一位被轉換者
+  ///（開刀順位第 3 順位，見 `GameState.convertedKnifeHolder`）。
+  bool get convertedTurnHasKnife {
+    final seat = convertedTurnSeat;
+    return seat != null && seat == state.convertedKnifeHolder;
+  }
 
   /// 今晚實際持刀的被轉換者；沒有就是 null。
   int? get convertedKnifeHolder => state.convertedKnifeHolder;
 
-  /// 正在延後離場中的白貓座次；沒有就是 null。
-  int? get _whiteCatPendingSeat {
-    final seat = state.seatOfRole(Roles.whiteCat.id);
-    if (seat == null) return null;
-    return state.isWhiteCatPending(seat) ? seat : null;
-  }
+  /// 這一步持有熊技能的人：熊本人，或學到熊的機械狼。
+  int? get _bearSeat => step.byMechanicWolf
+      ? state.seatOfRole(Roles.mechanicWolf.id)
+      : state.seatOfRole(Roles.bear.id);
 
   /// 熊今晚兩側的鄰座 —— 鄰座死亡會往外順延，所以每晚重算。
-  List<int> get bearNeighbors => NightArbitrator.bearNeighbors(state);
+  List<int> get bearNeighbors =>
+      NightArbitrator.bearNeighbors(state, seat: _bearSeat);
 
   /// 熊今晚會不會咆哮。
-  bool get bearGrowls => NightArbitrator.bearGrowls(state);
+  bool get bearGrowls => NightArbitrator.bearGrowls(
+        state,
+        convertedTonight: convertedTonight,
+        seat: _bearSeat,
+      );
 
   /// 剛剛查驗的座次 —— 目標已經寫進 [actions]，從那裡取回來。
   int? get _inspectedSeat {
@@ -423,6 +469,12 @@ class NightFlowMachine {
         NightSkill.mechanicReveal => NightSub.mechanicReveal,
         // 機械狼那一輪永遠從開刀手勢開始。
         NightSkill.mechanicTurn => NightSub.mechanicKnifeGesture,
+        NightSkill.convertedNotify => NightSub.convertedNotify,
+        NightSkill.convertedTurn => NightSub.convertedKnifeGesture,
+        // 第二夜起只剩一種 none 步驟：被轉換者接刀後喪失原技能的那一步。
+        // 人還活著、會睜眼，但沒有東西要收 —— 走過場，不是全員可點的選座頁。
+        // （首夜的 none 步驟由 _isNoOpStep 與 _afterRegistration 處理，到不了這裡。）
+        NightSkill.none => NightSub.passThrough,
         _ => NightSub.chooseTarget,
       };
 
@@ -443,7 +495,9 @@ class NightFlowMachine {
         NightSub.mechanicReveal ||
         NightSub.mechanicKnifeGesture ||
         NightSub.inspectResult ||
-        NightSub.passThrough =>
+        NightSub.passThrough ||
+        NightSub.convertedNotify ||
+        NightSub.convertedKnifeGesture =>
           0,
         // 女巫那一頁選的是毒藥目標；解藥另外用按鈕挑。
         _ => 1,
@@ -503,6 +557,10 @@ class NightFlowMachine {
       case NightSub.registerSeats:
       case NightSub.pickSpecial:
         return _picked.length == requiredPickCount;
+      case NightSub.gargoyleConvert:
+        // 一定要轉換（擔當 2026-09-25 指定：一定轉換兩位）。只有轉換範圍
+        // 都是石像鬼或已被轉換、根本沒得選時才放行，否則流程會卡死。
+        return _picked.isNotEmpty || (selectableSeats?.isEmpty ?? true);
       default:
         // 技能目標可以放棄（空刀、不用藥）；手勢與走過場沒有要選的東西。
         return true;
@@ -518,10 +576,12 @@ class NightFlowMachine {
       case NightSub.mechanicReveal:
       case NightSub.inspectResult:
       case NightSub.passThrough:
+      case NightSub.convertedNotify:
+      case NightSub.convertedKnifeGesture:
         return const {};
       case NightSub.gargoyleConvert:
-        // 只能轉換自己的左右鄰座。
-        return gargoyleNeighbors;
+        // 兩隻石像鬼的左右鄰座都能選，扣掉狼隊自己人與另一隻已經轉換的人。
+        return gargoyleConvertRange.difference(_blockedKeys);
       case NightSub.registerSeats:
         return _unassignedSeats;
       case NightSub.pickSpecial:
@@ -529,11 +589,12 @@ class NightFlowMachine {
         return state.seatsOfRole(Roles.wolf.id).toSet();
       case NightSub.mechanicKnife:
       case NightSub.secondKnife:
+      case NightSub.convertedKnife:
         // 第二刀可以砍同一人（破盾），所以不排除第一刀的目標。
-        return _aliveSeats;
+        return _aliveSeats.difference(_blockedKeys);
       case NightSub.witchPotion:
         // 這一頁的座位格選的是**毒藥**目標；解藥用下方的按鈕挑。
-        return poisonUsable ? _aliveSeats : const {};
+        return poisonUsable ? _aliveSeats.difference(_blockedKeys) : const {};
       case NightSub.chooseTarget:
         final blocked = blockedSeats;
         if (blocked == null) return null;
@@ -541,12 +602,14 @@ class NightFlowMachine {
     }
   }
 
+  Set<int> get _blockedKeys => blockedSeats?.keys.toSet() ?? const {};
+
   /// 不可選的座次與原因。null 表示沒有額外限制。
   Map<int, SeatBlockReason>? get blockedSeats {
     // 白貓翻牌後到正式離場之間**禁止成為任何技能的目標**
     // （擔當 2026-09-22 指定）。擋在輸入階段，不是收完再判定無效 ——
     // 這也順便免掉「延後期間又被殺一次」該怎麼結算的問題。
-    final pendingCat = _whiteCatPendingSeat;
+    final pendingCats = pendingCatBlocks(state);
 
     if (_sub == NightSub.witchPotion) {
       // 已經下了解藥、而本局不可同夜雙藥 → 毒藥整排都不能選。
@@ -555,19 +618,41 @@ class NightFlowMachine {
           for (final p in state.players) p.seat: SeatBlockReason.witchDualUse,
         };
       }
-      if (pendingCat != null) {
-        return {pendingCat: SeatBlockReason.whiteCatPending};
-      }
-      return null;
+      return pendingCats.isEmpty ? null : pendingCats;
+    }
+    if (_sub == NightSub.gargoyleConvert) {
+      // 只擋石像鬼自己人（兩隻互認）。**機械狼不擋** —— 石像鬼不認得牠，
+      // 擋了等於告訴石像鬼那一位是狼；選到的話轉換悄悄白費
+      //（見 `NightArbitrator.effectiveConversions`）。
+      final blocked = <int, SeatBlockReason>{
+        for (final seat in gargoyleConvertRange)
+          if (state.playerAt(seat).role?.id == Roles.awakenedGargoyle.id)
+            seat: SeatBlockReason.convertGargoyle
+          else if (actions.gargoyleConvertTargets.contains(seat))
+            seat: SeatBlockReason.alreadyConverted,
+      };
+      return blocked.isEmpty ? null : blocked;
+    }
+    // 機械狼與轉換者的刀也是刀 —— 延後中的白貓同樣不能選。
+    if (_sub == NightSub.mechanicKnife ||
+        _sub == NightSub.secondKnife ||
+        _sub == NightSub.convertedKnife) {
+      return pendingCats.isEmpty ? null : pendingCats;
     }
     if (_sub != NightSub.chooseTarget) return null;
 
-    // 各角色自己的限制只擋一個人，白貓這條是**所有技能都適用**，
-    // 所以擺在最前面；兩者同時成立時以白貓優先（反正都是不能選）。
-    if (pendingCat != null) {
-      return {pendingCat: SeatBlockReason.whiteCatPending};
-    }
+    // 各角色自己的限制與白貓那條擋的是**不同座次**，兩者要疊加 ——
+    // 以前有白貓就只回白貓，機械狼因此能學自己、守衛能連守。
+    // 同一座次兩者都成立時標白貓（寫在後面蓋過去）。
+    final blocked = <int, SeatBlockReason>{
+      ...?_skillBlockedSeats,
+      ...pendingCats,
+    };
+    return blocked.isEmpty ? null : blocked;
+  }
 
+  /// 各角色自己的輸入限制（連守、連魅惑、自刀、學自己、暗戀自己）。
+  Map<int, SeatBlockReason>? get _skillBlockedSeats {
     switch (effectiveSkill) {
       case NightSkill.guardProtect:
         final last = lastGuardOfActor;
@@ -645,13 +730,15 @@ class NightFlowMachine {
   Role? get mechanicLearnedRoleNow =>
       _arbitrator.mechanicLearnedRoleNow(state, actions);
 
-  /// 獵人今晚若出局能不能開槍 —— 法官給手勢用。
-  bool get hunterCanShootTonight =>
-      _arbitrator.hunterCanShootTonight(state, actions);
+  /// 獵人的開槍預告（能不能開、不能的話死於什麼）—— 法官給手勢用。
+  ///
+  /// 每次取都會試算一次結算，頁面在一次畫面裡取一次就好。
+  GunForecast get hunterGunForecast =>
+      _arbitrator.hunterGunForecast(state, actions);
 
-  /// 機械狼（學到槍牌）今晚若出局能不能開槍。
-  bool get mechanicCanShootTonight =>
-      _arbitrator.mechanicCanShootTonight(state, actions);
+  /// 機械狼（學到槍牌）的開槍預告。
+  GunForecast get mechanicGunForecast =>
+      _arbitrator.mechanicGunForecast(state, actions);
 
   // ---- 操作 ----
 
@@ -725,6 +812,10 @@ class NightFlowMachine {
 
   /// 前進到下一個子階段或步驟；走完全部步驟時進行結算並設定 [outcome]。
   void next() {
+    // 規則守在引擎：該選的沒選（登記座次、轉換）就不往下走 ——
+    // 不能只靠畫面把按鈕反灰。
+    if (!canProceed) return;
+
     // 先存快照再動 —— 存的是「這一步發生之前」的局面。
     undoStack.push(state, step.title, cursor: _cursor);
 
@@ -796,10 +887,8 @@ class NightFlowMachine {
         _advanceStep();
 
       case NightSub.gargoyleConvert:
-        // 收下這一隻的轉換對象，再問下一隻。
-        //
-        // 存進 **Set**：兩隻選到同一人時只會有一位轉換進狼隊
-        //（擔當指定，另一次白費），Set 天生就是這個語意。
+        // 收下這一隻的轉換對象，再問下一隻。第二隻選不到第一隻選過的人
+        //（[SeatBlockReason.alreadyConverted]），所以不會撞車。
         if (_picked.isNotEmpty) {
           actions.gargoyleConvertTargets.add(_picked.first);
         }
@@ -809,6 +898,27 @@ class NightFlowMachine {
         } else {
           _advanceStep();
         }
+
+      case NightSub.convertedNotify:
+        // 一格一位，叫滿石像鬼的數量才換下一步。
+        if (_gargoyleIndex + 1 < convertedNotifySlots) {
+          _gargoyleIndex++;
+        } else {
+          _advanceStep();
+        }
+
+      case NightSub.convertedKnifeGesture:
+        // 手勢給完：有刀就問刀口，沒刀就換下一位。
+        if (convertedTurnHasKnife) {
+          _sub = NightSub.convertedKnife;
+        } else {
+          _nextConvertedSlot();
+        }
+
+      case NightSub.convertedKnife:
+        actions.wolfTarget = _picked.isEmpty ? null : _picked.first;
+        _picked.clear();
+        _nextConvertedSlot();
 
       case NightSub.bearGrowl:
         // 咆哮是**資訊**，不動任何狀態，但要進復盤 ——
@@ -840,6 +950,9 @@ class NightFlowMachine {
     switch (step.mechanicSubSkill) {
       case NightSkill.none:
         _advanceStep();
+      case NightSkill.bearGrowl:
+        // 學到熊：比咆哮手勢，看的是機械狼自己的鄰座。
+        _sub = NightSub.bearGrowl;
       case NightSkill.witchPotion:
         // 機械狼學到女巫只有毒藥，沒有解藥 —— 同一頁，但解藥那排是暗的。
         _sub = NightSub.witchPotion;
@@ -890,7 +1003,11 @@ class NightFlowMachine {
       case NightSkill.secretAdmire:
         actions.secretAdmirerTarget = target;
       case NightSkill.dreamWeave:
-        actions.dreamTarget = target;
+        if (byMechanic) {
+          actions.mechanicDreamTarget = target;
+        } else {
+          actions.dreamTarget = target;
+        }
       case NightSkill.gargoyleConvert:
         // 轉換在 `next()` 裡逐隻收，這裡不處理。
         break;
@@ -899,8 +1016,20 @@ class NightFlowMachine {
       case NightSkill.bearGrowl:
       case NightSkill.mechanicReveal:
       case NightSkill.mechanicTurn:
+      case NightSkill.convertedNotify:
+      case NightSkill.convertedTurn:
       case NightSkill.none:
         break;
+    }
+  }
+
+  /// 轉換者那一輪換下一格；叫滿石像鬼的數量就換下一步。
+  void _nextConvertedSlot() {
+    if (_gargoyleIndex + 1 < convertedNotifySlots) {
+      _gargoyleIndex++;
+      _sub = NightSub.convertedKnifeGesture;
+    } else {
+      _advanceStep();
     }
   }
 
@@ -928,5 +1057,9 @@ class NightFlowMachine {
     final settled = _arbitrator.settle(state, actions);
     _arbitrator.apply(state, actions, settled);
     outcome = settled;
+
+    // 結算完就天亮了。要排在 apply 之後 —— 夜裡判死的白貓要在 night
+    // 階段延後（當天投票後生效），白天判死的才會被當成隔天生效。
+    state.phase = GamePhase.day;
   }
 }

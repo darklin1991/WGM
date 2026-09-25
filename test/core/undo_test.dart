@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wgm/core/engine/night_flow_machine.dart';
 import 'package:wgm/core/engine/undo_stack.dart';
 import 'package:wgm/core/models/game_state.dart';
+import 'package:wgm/core/models/night_action.dart';
 import 'package:wgm/core/models/player.dart';
 import 'package:wgm/core/models/preset.dart';
 import 'package:wgm/core/models/role.dart';
@@ -165,6 +166,108 @@ void main() {
       expect(s.playerAt(9).role?.id, Roles.villager.id);
       expect(s.playerAt(9).nightFacts, isEmpty);
       expect(s.playerAt(9).infoTags, isEmpty);
+    });
+
+    // 上一項是從空快照還原，只驗得到 restoreFrom —— copy() 漏掉的欄位
+    // 在快照裡剛好也是預設值，照樣會過。這一項反過來：先填非預設值再存快照，
+    // copy() 漏掉哪一個，還原後就會掉回預設值。
+    test('copy() 保留每個欄位的非預設值', () {
+      final s = _seeded()
+        ..dayNumber = 4
+        ..phase = GamePhase.day
+        ..sheriffSeat = 3
+        ..witchAntidoteAvailable = false
+        ..witchPoisonAvailable = false
+        ..lastGuardTarget = 9
+        ..charmedSeat = 10
+        ..lastCharmTarget = 10
+        ..mechanicWolfLearnedRole = Roles.guard
+        ..mechanicWolfLearnedNight = 2
+        ..mechanicPoisonAvailable = false
+        ..lastMechanicGuardTarget = 11
+        ..mechanicCharmedSeat = 12
+        ..lastMechanicCharmTarget = 12
+        ..knightDuelUsed = true
+        ..conversionNight = 1
+        ..whiteCatPendingCause = DeathCause.wolfKill
+        ..whiteCatDeathDueAfterDay = 5
+        ..lastDreamTarget = 7
+        ..mechanicWhiteCatPendingCause = DeathCause.poison
+        ..mechanicWhiteCatDueAfterDay = 6
+        ..lastMechanicDreamTarget = 8
+        ..secretAdmirerTarget = 5
+        ..secretAdmirerCamp = Camp.wolf;
+      s.convertedSeats.add(5);
+      s.convertedActivatedSeats.add(5);
+
+      final snapshot = s.copy();
+
+      s
+        ..dayNumber = 1
+        ..phase = GamePhase.setup
+        ..sheriffSeat = null
+        ..witchAntidoteAvailable = true
+        ..witchPoisonAvailable = true
+        ..lastGuardTarget = null
+        ..charmedSeat = null
+        ..lastCharmTarget = null
+        ..mechanicWolfLearnedRole = null
+        ..mechanicWolfLearnedNight = null
+        ..mechanicPoisonAvailable = true
+        ..lastMechanicGuardTarget = null
+        ..mechanicCharmedSeat = null
+        ..lastMechanicCharmTarget = null
+        ..knightDuelUsed = false
+        ..conversionNight = null
+        ..whiteCatPendingCause = null
+        ..whiteCatDeathDueAfterDay = null
+        ..lastDreamTarget = null
+        ..mechanicWhiteCatPendingCause = null
+        ..mechanicWhiteCatDueAfterDay = null
+        ..lastMechanicDreamTarget = null
+        ..secretAdmirerTarget = null
+        ..secretAdmirerCamp = null;
+      s.convertedSeats.clear();
+      s.convertedActivatedSeats.clear();
+
+      s.restoreFrom(snapshot);
+
+      expect(s.dayNumber, 4);
+      expect(s.phase, GamePhase.day);
+      expect(s.sheriffSeat, 3);
+      expect(s.witchAntidoteAvailable, isFalse);
+      expect(s.witchPoisonAvailable, isFalse);
+      expect(s.lastGuardTarget, 9);
+      expect(s.charmedSeat, 10);
+      expect(s.lastCharmTarget, 10);
+      expect(s.mechanicWolfLearnedRole, Roles.guard);
+      expect(s.mechanicWolfLearnedNight, 2);
+      expect(s.mechanicPoisonAvailable, isFalse);
+      expect(s.lastMechanicGuardTarget, 11);
+      expect(s.mechanicCharmedSeat, 12);
+      expect(s.lastMechanicCharmTarget, 12);
+      expect(s.knightDuelUsed, isTrue);
+      expect(s.conversionNight, 1);
+      expect(s.whiteCatPendingCause, DeathCause.wolfKill);
+      expect(s.whiteCatDeathDueAfterDay, 5);
+      expect(s.lastDreamTarget, 7);
+      expect(s.mechanicWhiteCatPendingCause, DeathCause.poison);
+      expect(s.mechanicWhiteCatDueAfterDay, 6);
+      expect(s.lastMechanicDreamTarget, 8);
+      expect(s.secretAdmirerTarget, 5);
+      expect(s.secretAdmirerCamp, Camp.wolf);
+      expect(s.convertedSeats, {5});
+      expect(s.convertedActivatedSeats, {5});
+    });
+
+    test('快照裡的集合與現況互不影響', () {
+      final s = _seeded();
+      s.convertedSeats.add(5);
+      final snapshot = s.copy();
+
+      s.convertedSeats.add(6);
+
+      expect(snapshot.convertedSeats, {5}, reason: '改現況不能連快照一起改');
     });
   });
 

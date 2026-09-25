@@ -1,7 +1,28 @@
 import 'package:flutter/material.dart';
 
+import '../../core/engine/seat_block_reason.dart';
 import '../../core/models/game_state.dart';
 import '../../shared/theme.dart';
+
+/// 禁選原因的顯示文字。原因由引擎判定（[SeatBlockReason]），這裡只負責措辭 ——
+/// 夜晚與白天的頁面共用這一份，同一個原因不會在不同頁面講成不同的話。
+String seatBlockReasonZh(SeatBlockReason reason) => switch (reason) {
+      SeatBlockReason.guardedLastNight => '昨晚已守',
+      SeatBlockReason.charmedLastNight => '昨晚已魅惑',
+      SeatBlockReason.wolfBeautySelfKill => '狼美人不能自刀',
+      SeatBlockReason.secretAdmirerSelf => '不能暗戀自己',
+      SeatBlockReason.whiteCatPending => '白貓已翻牌，離場前不能被指定',
+      SeatBlockReason.mechanicSelfLearn => '不能學自己',
+      SeatBlockReason.witchDualUse => '本局不可同夜雙藥',
+      SeatBlockReason.convertGargoyle => '石像鬼自己人，不能轉換',
+      SeatBlockReason.alreadyConverted => '另一隻已轉換他',
+      SeatBlockReason.duelSelf => '騎士本人',
+    };
+
+/// 把引擎給的禁選原因整份換成顯示文字，直接餵給 [SeatPicker.disabledReason]。
+Map<int, String> seatBlockReasonsZh(Map<int, SeatBlockReason> blocked) => {
+      for (final e in blocked.entries) e.key: seatBlockReasonZh(e.value),
+    };
 
 /// 座次選擇格線。
 ///

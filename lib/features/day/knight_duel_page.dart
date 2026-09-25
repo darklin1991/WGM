@@ -130,7 +130,7 @@ class _KnightDuelPageState extends State<KnightDuelPage> {
                     selectableSeats: _d.finished ? const {} : _d.opponents,
                     disabledReason: _d.finished
                         ? null
-                        : {_d.knightSeat: '騎士本人'},
+                        : seatBlockReasonsZh(_d.blockedSeats),
                     showRoleName: true,
                   ),
                   if (_d.finished) _resultCard(scheme),

@@ -257,6 +257,31 @@ void main() {
     });
   });
 
+  // 白天要記開槍目標，得知道是誰開的 —— 獵人本人與學到槍牌的機械狼
+  // 共用 hunterMayShoot，光看布林值分不出來。
+  group('可以開槍的座次', () {
+    test('獵人被刀 → 他自己', () {
+      expect(arb.settle(_state(), _actions(wolf: 7)).shooterSeats, [7]);
+    });
+
+    test('獵人被毒 → 沒有人', () {
+      expect(arb.settle(_state(), _actions(poison: 7)).shooterSeats, isEmpty);
+    });
+
+    test('狼王被自刀、獵人被毒 → 只有狼王', () {
+      final o = arb.settle(_state(), _actions(wolf: 4, poison: 7));
+      expect(o.shooterSeats, [4]);
+    });
+
+    test('兩位都能開 → 依座次排好', () {
+      final o = arb.settle(
+        _state(rules: const {'poisonedHunterCannotShoot': false}),
+        _actions(wolf: 4, poison: 7),
+      );
+      expect(o.shooterSeats, [4, 7]);
+    });
+  });
+
   group('預言家查驗', () {
     test('查到狼人 → 查殺', () {
       final out = arb.settle(_state(), _actions(seer: 1));

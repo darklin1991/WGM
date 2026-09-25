@@ -122,25 +122,33 @@ class _NightFlowPageState extends State<NightFlowPage> {
       ? _state.seatOfRole(Roles.mechanicWolf.id)
       : _state.seatOfRole(Roles.hunter.id);
 
-  bool get _gestureCanShoot => _gestureForMechanic
-      ? _m.mechanicCanShootTonight
-      : _m.hunterCanShootTonight;
-
   String get _gestureOwnerLabel => _gestureForMechanic
       ? '機械狼（已學到${_state.mechanicWolfLearnedRole?.nameZh ?? "槍牌"}）'
       : '獵人';
+
+  /// 1 → 一、2 → 二。轉換者最多兩位（一隻石像鬼一位），多的照阿拉伯數字。
+  static String _ordinalZh(int n) =>
+      const ['一', '二', '三', '四'].elementAtOrNull(n - 1) ?? '$n';
+
+  /// 轉換者那一輪要喊的稱呼，例如「第一位轉換者」。
+  String get _convertedCallName =>
+      '第${_ordinalZh(_m.convertedTurnOrdinal ?? 1)}位轉換者';
 
   String get _title => switch (_sub) {
         NightSub.registerSeats => '${_step.title}請睜眼',
         NightSub.pickSpecial => '哪一位是${_specialRole.nameZh}？',
         NightSub.witchPotion => '${_step.title}請睜眼',
         NightSub.hunterGesture => '${_step.title}請睜眼',
-        NightSub.bearGrowl => '熊請睜眼',
+        NightSub.bearGrowl => '$_callName請睜眼',
         NightSub.gargoyleConvert =>
           '${_m.currentGargoyleSeat} 號石像鬼要轉換誰？',
         NightSub.mechanicReveal => '機械狼請睜眼',
         NightSub.mechanicKnifeGesture => '機械狼請睜眼',
         NightSub.passThrough => '$_callName請睜眼',
+        NightSub.convertedNotify =>
+          '第${_ordinalZh(_m.convertedNotifyOrdinal ?? 1)}位轉換者請睜眼',
+        NightSub.convertedKnifeGesture => '$_convertedCallName請睜眼',
+        NightSub.convertedKnife => '${_m.convertedTurnSeat} 號轉換者要刀誰？',
         // 查驗者這時還睜著眼 —— 標題直接寫要比給誰看。
         NightSub.inspectResult => '比給$_callName看',
         NightSub.mechanicKnife =>
@@ -154,7 +162,7 @@ class _NightFlowPageState extends State<NightFlowPage> {
             NightSkill.charm => '${_step.title}要魅惑誰？',
             NightSkill.mechanicLearn => '機械狼要學習誰的技能？',
             NightSkill.secretAdmire => '暗戀者要暗戀誰？',
-            NightSkill.dreamWeave => '攝夢人要攝誰？',
+            NightSkill.dreamWeave => '${_step.title}要攝誰？',
             _ => _step.title,
           },
       };
@@ -171,8 +179,10 @@ class _NightFlowPageState extends State<NightFlowPage> {
                     : '請填入座次號碼',
         NightSub.hunterGesture => '請對獵人做出下面的手勢',
         NightSub.bearGrowl => '只告訴他咆哮或不咆哮，**不要說是哪一位**',
-        NightSub.gargoyleConvert => '只能轉換自己的左右鄰座（死亡會往外順延）。'
-            '整局只有首夜這一次，不轉請直接按下一步',
+        NightSub.gargoyleConvert => (_m.selectableSeats?.isEmpty ?? true)
+            ? '範圍裡都是石像鬼或已被轉換，這一隻轉換不了 —— 直接按下一步'
+            : '一定要轉換一位（整局只有首夜這一次）。兩隻石像鬼的左右鄰座都能選，'
+                '另一隻轉換過的人不能再選',
         NightSub.pickSpecial => _specialRole.id == Roles.wolfKing.id
             ? '狼王出局時可以開槍帶人，需要單獨記錄'
             : '狼美人出局時被魅惑者會殉情，需要單獨記錄',
@@ -181,6 +191,10 @@ class _NightFlowPageState extends State<NightFlowPage> {
         NightSub.mechanicKnifeGesture => '機械狼不知道小狼死光了沒，'
             '每晚都要由法官比手勢告知今晚有沒有刀',
         NightSub.passThrough => '照常喊完再讓他們閉眼，不要跳過',
+        NightSub.convertedNotify => '兩位都要叫，一位一位來 —— 他們互不相認',
+        NightSub.convertedKnifeGesture => '每晚都要叫，不論有沒有這一位、有沒有刀 ——'
+            '少喊一次，玩家就聽得出來',
+        NightSub.convertedKnife => '空刀請直接按下一步',
         // 這是唯一能告知的時機 —— 按下一步他就閉眼了。
         NightSub.inspectResult => '趁$_callName還睜著眼，把結果比給他看',
         NightSub.mechanicKnife => '空刀請直接按下一步',
@@ -259,24 +273,21 @@ class _NightFlowPageState extends State<NightFlowPage> {
   Map<int, String>? get _disabledReasons {
     final blocked = _m.blockedSeats;
     if (blocked == null) return null;
-    return {
-      for (final e in blocked.entries)
-        e.key: switch (e.value) {
-          SeatBlockReason.guardedLastNight => '昨晚已守',
-          SeatBlockReason.charmedLastNight => '昨晚已魅惑',
-          SeatBlockReason.wolfBeautySelfKill => '狼美人不能自刀',
-          SeatBlockReason.secretAdmirerSelf => '不能暗戀自己',
-          SeatBlockReason.whiteCatPending => '白貓已翻牌，離場前不能被指定',
-          SeatBlockReason.mechanicSelfLearn => '不能學自己',
-          SeatBlockReason.witchDualUse => '本局不可同夜雙藥',
-        },
-    };
+    return seatBlockReasonsZh(blocked);
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final stepLabel = '${_m.stepIndex + 1}/${_m.steps.length}';
+
+    // 開槍預告要試算一次結算 —— 只在需要的那兩頁算，而且一次畫面只算一次。
+    final gun = switch (_sub) {
+      NightSub.hunterGesture =>
+        _gestureForMechanic ? _m.mechanicGunForecast : _m.hunterGunForecast,
+      NightSub.mechanicReveal => _m.mechanicGunForecast,
+      _ => null,
+    };
 
     return Scaffold(
       appBar: AppBar(
@@ -347,7 +358,24 @@ class _NightFlowPageState extends State<NightFlowPage> {
           Expanded(
             child: SingleChildScrollView(
               child: _sub == NightSub.passThrough
-                  ? _PassThroughCard(name: _callName)
+                  ? _PassThroughCard(
+                      name: _callName,
+                      lostSkills: _m.isLostSkillsStep,
+                    )
+                  : _sub == NightSub.convertedKnifeGesture
+                  ? _ConvertedKnifeGestureCard(
+                      callName: _convertedCallName,
+                      seat: _m.convertedTurnSeat,
+                      alive: _m.convertedTurnSeatAlive,
+                      hasKnife: _m.convertedTurnHasKnife,
+                    )
+                  : _sub == NightSub.convertedNotify
+                  ? _ConvertedNotifyCard(
+                      seat: _m.convertedNotifySeat,
+                      originalRole: _m.convertedNotifySeat == null
+                          ? null
+                          : _state.playerAt(_m.convertedNotifySeat!).role,
+                    )
                   : _sub == NightSub.mechanicKnifeGesture
                   ? _MechanicKnifeGestureCard(
                       seat: _state.seatOfRole(Roles.mechanicWolf.id),
@@ -360,8 +388,8 @@ class _NightFlowPageState extends State<NightFlowPage> {
                       learnedRole: _m.mechanicLearnedRoleNow,
                       learnedTonight: _state.mechanicWolfLearnedRole == null &&
                           _actions.mechanicWolfLearnTarget != null,
-                      canShoot:
-                          _m.mechanicCanShootTonight,
+                      canShoot: gun!.canShoot,
+                      blockedBy: gun.blockedBy,
                     )
                   : _sub == NightSub.bearGrowl
                   ? _BearGrowlCard(
@@ -377,10 +405,8 @@ class _NightFlowPageState extends State<NightFlowPage> {
                   ? _HunterGestureCard(
                       ownerLabel: _gestureOwnerLabel,
                       seat: _gestureSeat,
-                      canShoot: _gestureCanShoot,
-                      poisonedTonight: _gestureSeat != null &&
-                          (_actions.witchPoisonTarget == _gestureSeat ||
-                              _actions.mechanicPoisonTarget == _gestureSeat),
+                      canShoot: gun!.canShoot,
+                      blockedBy: gun.blockedBy,
                     )
                   : _sub == NightSub.witchPotion
                   ? _WitchPanel(
@@ -458,6 +484,7 @@ class _NightFlowPageState extends State<NightFlowPage> {
         NightSub.registerSeats =>
           '請選滿 ${_step.seatCount} 位（已選 ${_m.picked.length}）',
         NightSub.pickSpecial => '請指定${_specialRole.nameZh}',
+        NightSub.gargoyleConvert => '請選擇轉換對象',
         _ => '下一步',
       };
 }
@@ -686,10 +713,20 @@ class _PotionRow extends StatelessWidget {
 /// 法官如果因為狼死光就不喊「狼人請睜眼」，玩家馬上從流程長度聽出來 ——
 /// 所以這張卡的重點是提醒法官**照常喊、照常停頓**，不要露餡。
 class _PassThroughCard extends StatelessWidget {
-  const _PassThroughCard({required this.name});
+  const _PassThroughCard({
+    required this.name,
+    this.lostSkills = false,
+    this.detail,
+  });
 
   /// 要喊的身分名稱（不含「（守衛）」這類後綴）。
   final String name;
+
+  /// 不是角色全滅，而是被轉換者接刀後喪失了原技能 —— 人還活著、會睜眼。
+  final bool lostSkills;
+
+  /// 為什麼沒有人會睜眼；null 表示「角色已全數出局」。
+  final String? detail;
 
   @override
   Widget build(BuildContext context) {
@@ -718,8 +755,84 @@ class _PassThroughCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                '$name已全數出局，沒有人會睜眼 —— 但還是要照常喊、照常停頓幾秒'
-                '再喊閉眼。跳過的話，玩家從流程長度就聽得出來。',
+                lostSkills
+                    ? '$name已轉換進狼隊，原技能已經失效 —— 他會睜眼，但沒有東西要收。'
+                        '照常停頓幾秒再喊閉眼。跳過的話，玩家從流程長度就聽得出來。'
+                    : '${detail ?? "$name已全數出局"}，沒有人會睜眼 —— '
+                        '但還是要照常喊、照常停頓幾秒再喊閉眼。'
+                        '跳過的話，玩家從流程長度就聽得出來。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.6,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 機械狼學到 [learned] 之後，技能什麼時候開始算 —— 給法官看的說明。
+/// 判斷在引擎（[NightFlow.mechanicSkillTimingOf]），這裡只管措辭。
+String mechanicSkillTimingText(Role learned) =>
+    switch (NightFlow.mechanicSkillTimingOf(learned)) {
+      MechanicSkillTiming.nextNight => '技能自下一夜起生效，整局只能學這一次。',
+      MechanicSkillTiming.immediate =>
+        '這是出局時才觸發的技能，學到就生效。整局只能學這一次。',
+      MechanicSkillTiming.none =>
+        '沒有技能，只套用身分（被查驗時顯示成這個身分）。整局只能學這一次。',
+    };
+
+/// 首夜最後告知被轉換者的卡片。
+///
+/// 這一格沒有人（當初選到機械狼、轉換白費）時照樣要喊、要停頓 —— 卡片寫明這件事，
+/// 免得法官以為可以跳過。
+class _ConvertedNotifyCard extends StatelessWidget {
+  const _ConvertedNotifyCard({required this.seat, required this.originalRole});
+
+  final int? seat;
+  final Role? originalRole;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final who = seat;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              Icon(
+                who == null
+                    ? Icons.volume_up_rounded
+                    : Icons.swap_horiz_rounded,
+                size: 56,
+                color: who == null ? scheme.onSurfaceVariant : WgmTheme.wolfColor,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                who == null
+                    ? '這一位沒有人'
+                    : '$who 號（${originalRole?.nameZh ?? "?"}）',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                who == null
+                    ? '沒有人會睜眼 —— 照常停頓幾秒再喊閉眼。'
+                    : '告訴他：你已被轉換，勝負算狼隊。原本的技能照常能用，'
+                        '直到輪到你接刀的那一刻才失效。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
@@ -757,52 +870,16 @@ class _MechanicKnifeGestureCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = hasKnife ? WgmTheme.wolfColor : scheme.onSurfaceVariant;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
         children: [
-          Card(
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                color: color.withValues(alpha: 0.12),
-                border: Border.all(color: color.withValues(alpha: 0.6)),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    hasKnife
-                        ? Icons.thumb_up_rounded
-                        : Icons.thumb_down_rounded,
-                    size: 72,
-                    color: color,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    hasKnife ? '拇指向上' : '拇指向下',
-                    style: TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w900,
-                      color: color,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    hasKnife
-                        ? (extraKnife ? '今晚有刀，可以砍兩刀' : '今晚有刀')
-                        : '今晚沒有刀',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          _KnifeGestureBadge(
+            hasKnife: hasKnife,
+            label: hasKnife
+                ? (extraKnife ? '今晚有刀，可以砍兩刀' : '今晚有刀')
+                : '今晚沒有刀',
           ),
           const SizedBox(height: 14),
           Text(
@@ -827,6 +904,118 @@ class _MechanicKnifeGestureCard extends StatelessWidget {
   }
 }
 
+/// 開刀手勢的大卡片：拇指向上＝有刀、向下＝沒刀。機械狼與轉換者共用。
+///
+/// 做成一眼可辨的大卡片，現場光線差、動作要快。
+class _KnifeGestureBadge extends StatelessWidget {
+  const _KnifeGestureBadge({required this.hasKnife, required this.label});
+
+  final bool hasKnife;
+
+  /// 拇指下面那行字，例如「今晚有刀」。
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = hasKnife ? WgmTheme.wolfColor : scheme.onSurfaceVariant;
+
+    return Card(
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: color.withValues(alpha: 0.12),
+          border: Border.all(color: color.withValues(alpha: 0.6)),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              hasKnife ? Icons.thumb_up_rounded : Icons.thumb_down_rounded,
+              size: 72,
+              color: color,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              hasKnife ? '拇指向上' : '拇指向下',
+              style: TextStyle(
+                fontSize: 30,
+                fontWeight: FontWeight.w900,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 轉換者的開刀手勢卡（第二夜起每晚）。
+///
+/// 這一格沒有人、或那一位已出局時，照樣要喊、要停頓 —— 卡片寫明這件事。
+class _ConvertedKnifeGestureCard extends StatelessWidget {
+  const _ConvertedKnifeGestureCard({
+    required this.callName,
+    required this.seat,
+    required this.alive,
+    required this.hasKnife,
+  });
+
+  /// 要喊的稱呼，例如「第一位轉換者」。
+  final String callName;
+  final int? seat;
+  final bool alive;
+  final bool hasKnife;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final who = seat;
+
+    if (who == null || !alive) {
+      return _PassThroughCard(
+        name: callName,
+        detail: who == null
+            ? '這一格沒有人（當初選到機械狼，轉換沒有生效）'
+            : '$who 號轉換者已出局',
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          _KnifeGestureBadge(
+            hasKnife: hasKnife,
+            label: hasKnife ? '今晚有刀' : '今晚沒有刀',
+          ),
+          const SizedBox(height: 14),
+          Text(
+            hasKnife
+                ? '石像鬼與機械狼都已出局，只剩 $who 號一位轉換者 —— 由他開刀。'
+                    '這一刻起他的原技能失效。'
+                : '$who 號今晚沒有刀。要等石像鬼、機械狼都出局，而且只剩他一位'
+                    '轉換者，才輪到他開刀。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 機械狼的夜晚結尾告知卡。
 ///
 /// 機械狼是第一個睜眼的，那時候身分都還沒登記完、女巫的毒也還沒收 ——
@@ -837,6 +1026,7 @@ class _MechanicRevealCard extends StatelessWidget {
     required this.learnedRole,
     required this.learnedTonight,
     required this.canShoot,
+    required this.blockedBy,
   });
 
   final int? seat;
@@ -849,6 +1039,9 @@ class _MechanicRevealCard extends StatelessWidget {
 
   /// 學到槍牌時，今晚出局能不能開槍。
   final bool canShoot;
+
+  /// 今晚若出局、不能開槍的原因；槍完好時為 null。
+  final DeathCause? blockedBy;
 
   bool get _hasGun =>
       learnedRole != null && Roles.gunRoleIds.contains(learnedRole!.id);
@@ -889,7 +1082,7 @@ class _MechanicRevealCard extends StatelessWidget {
                       _ when learnedRole == null =>
                         '機械狼沒有指定學習對象，之後的夜晚仍可再學。',
                       _ when learnedTonight =>
-                        '請比給 $seat 號機械狼看。技能自**下一夜**起生效，整局只能學這一次。',
+                        '請比給 $seat 號機械狼看。${mechanicSkillTimingText(learnedRole!)}',
                       _ => '之前的夜晚已經學到，這裡只是再確認一次。',
                     },
                     style: TextStyle(
@@ -908,7 +1101,7 @@ class _MechanicRevealCard extends StatelessWidget {
               ownerLabel: '機械狼（已學到${learnedRole!.nameZh}）',
               seat: seat,
               canShoot: canShoot,
-              poisonedTonight: !canShoot,
+              blockedBy: blockedBy,
             ),
           ],
         ],
@@ -926,7 +1119,7 @@ class _HunterGestureCard extends StatelessWidget {
     required this.ownerLabel,
     required this.seat,
     required this.canShoot,
-    required this.poisonedTonight,
+    required this.blockedBy,
   });
 
   /// 這張手勢卡是給誰的：「獵人」或「機械狼（已學到獵人）」。
@@ -934,7 +1127,9 @@ class _HunterGestureCard extends StatelessWidget {
 
   final int? seat;
   final bool canShoot;
-  final bool poisonedTonight;
+
+  /// 今晚若出局、不能開槍的原因（死因）；槍完好時為 null。判斷在引擎。
+  final DeathCause? blockedBy;
 
   @override
   Widget build(BuildContext context) {
@@ -988,9 +1183,11 @@ class _HunterGestureCard extends StatelessWidget {
           Text(
             switch (true) {
               _ when seat == null => '此局沒有$ownerLabel',
-              _ when poisonedTonight => '$ownerLabel（$seat 號）今晚被毒，'
-                  '依規則不可開槍',
               _ when canShoot => '$ownerLabel為 $seat 號，技能正常',
+              _ when blockedBy == DeathCause.poison =>
+                '$ownerLabel（$seat 號）今晚被毒，不可開槍',
+              _ when blockedBy == DeathCause.dreamDeath =>
+                '$ownerLabel（$seat 號）今晚會夢死，不可開槍',
               _ => '$ownerLabel（$seat 號）目前無法開槍',
             },
             textAlign: TextAlign.center,

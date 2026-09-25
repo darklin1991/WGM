@@ -3,6 +3,7 @@ import '../models/log_entry.dart';
 import '../models/night_action.dart';
 import '../models/player.dart';
 import '../models/role.dart';
+import 'seat_block_reason.dart';
 import 'undo_stack.dart';
 
 /// 決鬥的結果。
@@ -75,9 +76,20 @@ class KnightDuel {
   static bool isAvailable(GameState state) =>
       !state.knightDuelUsed && aliveKnightSeat(state) != null;
 
-  /// 可以指定的對手：除了騎士自己以外的存活玩家。
-  Set<int> get opponents =>
-      state.alivePlayers.map((p) => p.seat).toSet()..remove(knightSeat);
+  /// 不能選的對手與原因：騎士自己，加上白天共用的限制（見 [dayBlockedSeats]）。
+  Map<int, SeatBlockReason> get blockedSeats => {
+        ...dayBlockedSeats(state),
+        knightSeat: SeatBlockReason.duelSelf,
+      };
+
+  /// 可以指定的對手：存活、而且不在 [blockedSeats] 裡。
+  Set<int> get opponents {
+    final blocked = blockedSeats;
+    return {
+      for (final p in state.alivePlayers)
+        if (!blocked.containsKey(p.seat)) p.seat,
+    };
+  }
 
   /// 白天是否就此結束（決鬥到狼，且本局採「決鬥出狼立即進夜」）。
   ///

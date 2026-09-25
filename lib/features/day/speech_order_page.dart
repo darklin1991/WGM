@@ -31,7 +31,7 @@ class SpeechOrderPage extends StatefulWidget {
 
   final GameState state;
 
-  /// 昨晚公布的死者。
+  /// 昨晚公布的死者，**加上天亮後被槍帶走的人**（擔當 2026-09-24 指定）。
   final List<int> deceased;
 
   /// 順序定好之後要做什麼。參數是確定下來的發言順序（座次，依序）。
@@ -117,7 +117,8 @@ class _SpeechOrderPageState extends State<SpeechOrderPage> {
               '再對照下面的號碼順序挑',
         SpeechOrderBasis.sheriff => widget.deceased.isEmpty
             ? '昨晚是平安夜，從警長 $_referenceSeat 號開始算'
-            : '昨晚死了 ${widget.deceased.length} 位，從警長 $_referenceSeat 號開始算',
+            : '昨晚到現在死了 ${widget.deceased.length} 位，'
+                '從警長 $_referenceSeat 號開始算',
         SpeechOrderBasis.random =>
           '本局沒有警長，起點與方向都由上帝抽。抽到 $_referenceSeat 號，'
               '${_randomPlan!.clockwise ? "順時鐘" : "逆時鐘"}',

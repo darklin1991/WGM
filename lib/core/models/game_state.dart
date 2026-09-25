@@ -59,7 +59,10 @@ class GameState {
     required this.conversionNight,
     required this.whiteCatPendingCause,
     required this.whiteCatDeathDueAfterDay,
+    required this.mechanicWhiteCatPendingCause,
+    required this.mechanicWhiteCatDueAfterDay,
     required this.lastDreamTarget,
+    required this.lastMechanicDreamTarget,
     required this.secretAdmirerTarget,
     required this.secretAdmirerCamp,
     required this.log,
@@ -134,8 +137,8 @@ class GameState {
 
   /// 首夜被覺醒石像鬼轉換進狼隊的座次。
   ///
-  /// 兩隻石像鬼轉換到同一個人時只會有一位（擔當 2026-09-22 指定：
-  /// 就只有那一個人轉換進狼隊，另一次白費），所以這裡是 **Set**。
+  /// 兩隻石像鬼一定各轉換一位、不會撞車（擔當 2026-09-25 指定），所以通常是
+  /// 兩位；只有選到機械狼（轉換悄悄白費）時才會少一位。
   final Set<int> convertedSeats = {};
 
   /// 轉換發生在第幾夜（一定是 1）。查驗的首夜延遲要用它。
@@ -186,6 +189,18 @@ class GameState {
   /// [seat] 是否已經因為接刀而喪失原技能。
   bool hasLostSkills(int seat) => convertedActivatedSeats.contains(seat);
 
+  /// 今晚 [seat] 的原技能還能不能用 —— 已經喪失，或**今晚就要接刀**。
+  ///
+  /// 「轉換」發生在接刀那一刻，同時喪失尚未使用的原技能（擔當 2026-09-22
+  /// 指定）。[convertedActivatedSeats] 要到那一夜結算才記下，但步驟在入夜時
+  /// 就排好了 —— 只看 [hasLostSkills] 的話，接刀那一夜排在狼刀之後的
+  /// 原技能（女巫的藥、獵人的槍）照樣能用。
+  ///
+  /// 只在夜裡用。白天看 [hasLostSkills]：條件在白天成立的人，要到當晚
+  /// 接刀才轉換，白天還是原本的身分。
+  bool losesSkillsTonight(int seat) =>
+      hasLostSkills(seat) || convertedKnifeHolder == seat;
+
   // ---- 白貓 ----
 
   /// 白貓被判死的原因；null 表示還沒被判死（或本局沒有白貓）。
@@ -205,42 +220,86 @@ class GameState {
   /// 白貓是否已經翻牌 —— 判死當下就公開身分，只有死亡延後。
   bool get whiteCatRevealed => whiteCatPendingCause != null;
 
-  /// [seat] 這次的死亡要不要改成白貓的延後離場。
+  /// 學到白貓的機械狼被判死的原因；null 表示還沒被判死。
+  ///
+  /// 與真正的白貓**各自獨立**（同機械狼其他學來的技能），兩人可能同時在延後中。
+  DeathCause? mechanicWhiteCatPendingCause;
+
+  /// 學到白貓的機械狼，延後的死亡要在「第幾天的放逐投票結束後」生效。
+  int? mechanicWhiteCatDueAfterDay;
+
+  /// [seat] 是不是學到白貓的機械狼。白貓是出局時才觸發的被動技能，
+  /// 比照槍牌**學到就生效**，不等隔夜。
+  bool _isMechanicWhiteCat(int seat) =>
+      playerAt(seat).role?.id == Roles.mechanicWolf.id &&
+      mechanicWolfLearnedRole?.id == Roles.whiteCat.id;
+
+  /// 夜裡判死 → 當天的放逐投票結束後生效；
+  /// 白天判死 → **隔天**那一次才生效（擔當指定，不是當下這一次）。
+  int get _catDueDay => phase == GamePhase.night ? dayNumber : dayNumber + 1;
+
+  /// [seat] 這次的死亡要不要改成白貓的延後離場。真正的白貓與學到白貓的
+  /// 機械狼都適用。
   ///
   /// 成立時**記下延後、回傳 true**，呼叫端就不要把他標成出局了。
-  /// 已經在延後中的白貓不會再被判一次 —— 那段期間他禁止成為技能目標，
+  /// 已經在延後中的不會再被判一次 —— 那段期間他禁止成為技能目標，
   /// 照理碰不到，這裡只是防呆。
+  ///
+  /// 被轉換的白貓**接刀之後**就沒有這個技能了（喪失尚未使用的原技能）。
+  /// 夜裡結算時接刀已經先記進 [convertedActivatedSeats]，所以這裡看
+  /// [hasLostSkills] 就夠，接刀當夜也算得到。
   bool deferWhiteCatDeath(int seat, DeathCause cause) {
-    if (playerAt(seat).role?.id != Roles.whiteCat.id) return false;
-    if (whiteCatPendingCause != null) return false;
-
-    whiteCatPendingCause = cause;
-    // 夜裡判死 → 當天的放逐投票結束後生效；
-    // 白天判死 → **隔天**那一次才生效（擔當指定，不是當下這一次）。
-    whiteCatDeathDueAfterDay =
-        phase == GamePhase.night ? dayNumber : dayNumber + 1;
-    return true;
+    if (playerAt(seat).role?.id == Roles.whiteCat.id) {
+      if (hasLostSkills(seat)) return false;
+      if (whiteCatPendingCause != null) return false;
+      whiteCatPendingCause = cause;
+      whiteCatDeathDueAfterDay = _catDueDay;
+      return true;
+    }
+    if (_isMechanicWhiteCat(seat)) {
+      if (mechanicWhiteCatPendingCause != null) return false;
+      mechanicWhiteCatPendingCause = cause;
+      mechanicWhiteCatDueAfterDay = _catDueDay;
+      return true;
+    }
+    return false;
   }
 
-  /// 白貓延後的死亡是否已經到期（可以在這一天的放逐投票結束後生效）。
-  bool get whiteCatDeathIsDue =>
-      whiteCatPendingCause != null &&
-      whiteCatDeathDueAfterDay != null &&
-      dayNumber >= whiteCatDeathDueAfterDay!;
+  /// [seat] 延後離場的死因；不在延後中時為 null。
+  DeathCause? pendingCatCause(int seat) {
+    if (playerAt(seat).role?.id == Roles.whiteCat.id) return whiteCatPendingCause;
+    if (_isMechanicWhiteCat(seat)) return mechanicWhiteCatPendingCause;
+    return null;
+  }
 
-  /// 白貓現在是否在「已翻牌但還沒離場」的延後期間。
+  /// 延後的死亡已經到期（可以在這一天的放逐投票結束後生效）、還活著的座次。
+  List<int> get catDeathsDue {
+    bool due(DeathCause? cause, int? day) =>
+        cause != null && day != null && dayNumber >= day;
+    return [
+      for (final p in alivePlayers)
+        if ((p.role?.id == Roles.whiteCat.id &&
+                due(whiteCatPendingCause, whiteCatDeathDueAfterDay)) ||
+            (_isMechanicWhiteCat(p.seat) &&
+                due(mechanicWhiteCatPendingCause, mechanicWhiteCatDueAfterDay)))
+          p.seat,
+    ];
+  }
+
+  /// [seat] 現在是否在「已翻牌但還沒離場」的延後期間（白貓，或學到白貓的機械狼）。
   ///
   /// 這段期間他**禁止成為技能目標** —— 刀、毒、救、守、攝夢都不能選他。
   bool isWhiteCatPending(int seat) =>
-      whiteCatPendingCause != null &&
-      playerAt(seat).role?.id == Roles.whiteCat.id &&
-      playerAt(seat).alive;
+      pendingCatCause(seat) != null && playerAt(seat).alive;
 
   // ---- 攝夢人 ----
 
   /// 攝夢人**上一晚**攝的座次。連續兩晚攝同一人會讓那人夢死，
   /// 所以要記住上一晚是誰。
   int? lastDreamTarget;
+
+  /// 學到攝夢人的機械狼**上一晚**攝的座次。與原攝夢人各自獨立。
+  int? lastMechanicDreamTarget;
 
   // ---- 暗戀者 ----
 
@@ -441,7 +500,10 @@ class GameState {
     conversionNight = snapshot.conversionNight;
     whiteCatPendingCause = snapshot.whiteCatPendingCause;
     whiteCatDeathDueAfterDay = snapshot.whiteCatDeathDueAfterDay;
+    mechanicWhiteCatPendingCause = snapshot.mechanicWhiteCatPendingCause;
+    mechanicWhiteCatDueAfterDay = snapshot.mechanicWhiteCatDueAfterDay;
     lastDreamTarget = snapshot.lastDreamTarget;
+    lastMechanicDreamTarget = snapshot.lastMechanicDreamTarget;
     secretAdmirerTarget = snapshot.secretAdmirerTarget;
     secretAdmirerCamp = snapshot.secretAdmirerCamp;
     log.restoreFrom(snapshot.log);
@@ -472,9 +534,16 @@ class GameState {
         conversionNight: conversionNight,
         whiteCatPendingCause: whiteCatPendingCause,
         whiteCatDeathDueAfterDay: whiteCatDeathDueAfterDay,
+        mechanicWhiteCatPendingCause: mechanicWhiteCatPendingCause,
+        mechanicWhiteCatDueAfterDay: mechanicWhiteCatDueAfterDay,
         lastDreamTarget: lastDreamTarget,
+        lastMechanicDreamTarget: lastMechanicDreamTarget,
         secretAdmirerTarget: secretAdmirerTarget,
         secretAdmirerCamp: secretAdmirerCamp,
         log: log.copy(),
-      );
+      )
+        // 這兩個是宣告時就初始化的 final Set，建構子收不進來，
+        // 只能建好之後再倒進去（同 Player.copy 的 nightFacts）。
+        ..convertedSeats.addAll(convertedSeats)
+        ..convertedActivatedSeats.addAll(convertedActivatedSeats);
 }

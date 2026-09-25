@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wgm/core/engine/night_arbitrator.dart';
 import 'package:wgm/core/engine/night_flow.dart';
+import 'package:wgm/core/engine/vote_resolver.dart';
 import 'package:wgm/core/models/game_state.dart';
 import 'package:wgm/core/models/night_action.dart';
 import 'package:wgm/core/models/player.dart';
@@ -263,6 +264,11 @@ void main() {
       final a = NightActions(night: 2)..wolfTarget = 4; // 小狼誤刀機械狼
 
       expect(_arb.settle(s, a).hunterMayShoot, isTrue);
+      expect(
+        _arb.settle(s, a).shooterSeats,
+        [4],
+        reason: '開槍的是機械狼，不是獵人本人',
+      );
     });
 
     test('學到狼王一樣是槍牌', () {
@@ -291,6 +297,54 @@ void main() {
 
       expect(_deathMap(o)[4], DeathCause.guardHealConflict);
       expect(o.hunterMayShoot, isTrue);
+    });
+
+    // 吃推是另一半 —— 衝突裁決表寫「學到槍牌吃刀／吃推出局｜可開槍」，
+    // 但以前白天的放逐只看真實身分，機械狼被推出去就直接結束。
+    ExileVote exile4(GameState s) {
+      s.phase = GamePhase.day;
+      final v = ExileVote(state: s)..focusTarget(4);
+      for (final voter in [5, 6, 7]) {
+        v.toggleVote(voter);
+      }
+      v.next();
+      return v;
+    }
+
+    test('被放逐 → 可以開槍', () {
+      final s = _learned(Roles.hunter)..dayNumber = 2;
+      final v = exile4(s);
+
+      expect(v.stage, ExileStage.shoot);
+      expect(v.shooterSeat, 4);
+      expect(v.notes, contains('4 號被放逐，可以開槍'), reason: '不寫身分，免得露餡');
+    });
+
+    // 擔當 2026-09-24 指定：槍學到就有，不等隔夜生效。
+    test('學習隔天的白天就能開', () {
+      final s = _learned(Roles.hunter)..dayNumber = 1;
+      expect(exile4(s).stage, ExileStage.shoot);
+    });
+
+    test('學習當晚被刀 → 也能開槍', () {
+      final s = _state()..dayNumber = 2;
+      final a = NightActions(night: 2)
+        ..mechanicWolfLearnTarget = 7 // 學獵人
+        ..wolfTarget = 4; // 小狼誤刀機械狼
+      final o = _arb.settle(s, a);
+
+      expect(s.mechanicWolfLearnedRole, isNull, reason: '還沒結算進狀態');
+      expect(o.shooterSeats, [4]);
+      expect(
+        _arb.mechanicCanShootTonight(s, a),
+        isTrue,
+        reason: '結尾那一輪的手勢與結算要一致',
+      );
+    });
+
+    test('學到的不是槍牌 → 被放逐也沒有槍', () {
+      final s = _learned(Roles.guard)..dayNumber = 2;
+      expect(exile4(s).stage, isNot(ExileStage.shoot));
     });
 
     test('沒學到槍牌就沒有槍', () {
